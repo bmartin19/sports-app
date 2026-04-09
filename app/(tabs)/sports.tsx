@@ -1,125 +1,95 @@
-import { useRouter } from "expo-router";
-import { useState } from "react";
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { FlatList, StyleSheet, Text, View } from "react-native";
+
+type Team = {
+  team: { displayName: string };
+  score: string;
+};
+
+type Game = {
+  id: string;
+  status: { type: { description: string; state: string } };
+  competitions: { competitors: Team[] }[];
+};
 
 export default function SportsScreen() {
-  const [selectedLeague, setSelectedLeague] = useState("NBA");
-  const [selectedDay, setSelectedDay] = useState("Mon");
-  const router = useRouter();
+  const [games, setGames] = useState<Game[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [league, setLeague] = useState("nba");
+
+  const sports = {
+    nba: { sport: "basketball", league: "nba" },
+    nfl: { sport: "football", league: "nfl" },
+    mlb: { sport: "baseball", league: "mlb" },
+    wnba: { sport: "basketball", league: "wnba" },
+    nhl: { sport: "hockey", league: "nhl" },
+  };
+
+  useEffect(() => {
+    const selected = sports[league as keyof typeof sports];
+    setLoading(true);
+    fetch(
+      `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        setGames(data.events || []);
+        setLoading(false);
+      });
+  }, [league]);
+
+  if (loading)
+    return (
+      <View style={styles.container}>
+        <Text>Loading...</Text>
+      </View>
+    );
+
+  if (games.length === 0)
+    return (
+      <View style={styles.container}>
+        <Text>No games today</Text>
+      </View>
+    );
 
   return (
-    <View style={styles.container}>
-      {/* League Tabs */}
-      <View style={styles.leagueRow}>
-        {["NBA", "NFL", "MLB"].map((league) => (
-          <TouchableOpacity
-            key={league}
-            onPress={() => setSelectedLeague(league)}
-          >
-            <Text
-              style={[
-                styles.league,
-                selectedLeague === league && styles.activeTab,
-              ]}
-            >
-              {league}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+    <FlatList
+      data={games}
+      keyExtractor={(item) => item.id}
+      renderItem={({ item }) => {
+        const competitors = item.competitions[0].competitors;
+        const home = competitors.find((c, i) => i === 0);
+        const away = competitors.find((c, i) => i === 1);
+        const status = item.status.type.description;
 
-      {/* Date Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.dateRow}
-      >
-        {["Mon", "Tue", "Wed", "Thu", "Fri"].map((day) => (
-          <TouchableOpacity key={day} onPress={() => setSelectedDay(day)}>
-            <Text
-              style={[styles.date, selectedDay === day && styles.activeTab]}
-            >
-              {day}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {/* Game Cards */}
-      <ScrollView>
-        <TouchableOpacity onPress={() => router.push("/game/[id]")}>
+        return (
           <View style={styles.card}>
-            <Text style={styles.cardText}>Lakers vs Warriors</Text>
-            <Text style={styles.cardText}>102 - 98</Text>
-            <Text style={styles.cardSub}>Final</Text>
+            <View style={styles.row}>
+              <Text style={styles.team}>{away?.team.displayName}</Text>
+              <Text style={styles.score}>{away?.score ?? "-"}</Text>
+            </View>
+            <View style={styles.row}>
+              <Text style={styles.team}>{home?.team.displayName}</Text>
+              <Text style={styles.score}>{home?.score ?? "-"}</Text>
+            </View>
+            <Text style={styles.status}>{status}</Text>
           </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity onPress={() => router.push("/game/[id]")}>
-          <View style={styles.card}>
-            <Text style={styles.cardText}>Celtics vs Heat</Text>
-            <Text style={styles.cardText}>88 - 90</Text>
-            <Text style={styles.cardSub}>Q4</Text>
-          </View>
-        </TouchableOpacity>
-      </ScrollView>
-    </View>
+        );
+      }}
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0B0B0B",
-    paddingTop: 50,
-  },
-
-  leagueRow: {
+  container: { flex: 1, alignItems: "center", justifyContent: "center" },
+  card: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#ccc" },
+  row: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 10,
+    justifyContent: "space-between",
+    marginBottom: 4,
   },
-
-  league: {
-    color: "white",
-    fontSize: 18,
-  },
-
-  activeTab: {
-    color: "#00FFAA",
-    fontWeight: "bold",
-  },
-
-  dateRow: {
-    paddingVertical: 10,
-    paddingLeft: 10,
-  },
-
-  date: {
-    color: "gray",
-    marginRight: 15,
-    fontSize: 16,
-  },
-
-  card: {
-    backgroundColor: "#1A1A1A",
-    margin: 10,
-    padding: 15,
-    borderRadius: 10,
-  },
-
-  cardText: {
-    color: "white",
-    fontSize: 16,
-  },
-
-  cardSub: {
-    color: "gray",
-  },
+  team: { fontSize: 16, color: "white" },
+  score: { fontSize: 16, color: "white", fontWeight: "bold" },
+  status: { fontSize: 12, color: "green", marginTop: 10 },
+  boxscore: { fontSize: 14, color: "yellow" },
 });
