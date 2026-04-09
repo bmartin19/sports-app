@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import { FlatList, StyleSheet, Text, View } from "react-native";
+import {
+  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 
 type Team = {
   team: { displayName: string };
@@ -53,30 +60,52 @@ export default function SportsScreen() {
     );
 
   return (
-    <FlatList
-      data={games}
-      keyExtractor={(item) => item.id}
-      renderItem={({ item }) => {
-        const competitors = item.competitions[0].competitors;
-        const home = competitors.find((c, i) => i === 0);
-        const away = competitors.find((c, i) => i === 1);
-        const status = item.status.type.description;
+    <View style={{ flex: 1 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.tabs}
+      >
+        {Object.keys(sports).map((key) => (
+          <TouchableOpacity
+            key={key}
+            onPress={() => setLeague(key)}
+            style={[styles.tab, league === key && styles.activeTab]}
+          >
+            <Text
+              style={[styles.tabText, league === key && styles.activeTabText]}
+            >
+              {key.toUpperCase()}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
-        return (
-          <View style={styles.card}>
-            <View style={styles.row}>
-              <Text style={styles.team}>{away?.team.displayName}</Text>
-              <Text style={styles.score}>{away?.score ?? "-"}</Text>
+      <FlatList
+        data={games}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => {
+          const competitors = item.competitions[0].competitors;
+          const home = competitors[0];
+          const away = competitors[1];
+          const status = item.status.type.description;
+
+          return (
+            <View style={styles.card}>
+              <View style={styles.row}>
+                <Text style={styles.team}>{away?.team.displayName}</Text>
+                <Text style={styles.score}>{away?.score ?? "-"}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.team}>{home?.team.displayName}</Text>
+                <Text style={styles.score}>{home?.score ?? "-"}</Text>
+              </View>
+              <Text style={styles.status}>{status}</Text>
             </View>
-            <View style={styles.row}>
-              <Text style={styles.team}>{home?.team.displayName}</Text>
-              <Text style={styles.score}>{home?.score ?? "-"}</Text>
-            </View>
-            <Text style={styles.status}>{status}</Text>
-          </View>
-        );
-      }}
-    />
+          );
+        }}
+      />
+    </View>
   );
 }
 
@@ -92,4 +121,15 @@ const styles = StyleSheet.create({
   score: { fontSize: 16, color: "white", fontWeight: "bold" },
   status: { fontSize: 12, color: "green", marginTop: 10 },
   boxscore: { fontSize: 14, color: "yellow" },
+  tabs: { flexDirection: "row", paddingHorizontal: 12, paddingVertical: 8 },
+  tab: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: "#eee",
+  },
+  activeTab: { backgroundColor: "#000" },
+  tabText: { fontSize: 13, fontWeight: "600", color: "#666" },
+  activeTabText: { color: "#fff" },
 });
