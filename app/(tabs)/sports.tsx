@@ -75,25 +75,27 @@ export default function SportsScreen() {
       </TouchableOpacity>
 
       {/* League Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabs}
-      >
-        {Object.keys(sports).map((key) => (
-          <TouchableOpacity
-            key={key}
-            onPress={() => setLeague(key)}
-            style={[styles.tab, league === key && styles.activeTab]}
-          >
-            <Text
-              style={[styles.tabText, league === key && styles.activeTabText]}
+      <View style={styles.tabsWrapper}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsContent}
+        >
+          {Object.keys(sports).map((key) => (
+            <TouchableOpacity
+              key={key}
+              onPress={() => setLeague(key)}
+              style={[styles.tab, league === key && styles.activeTab]}
             >
-              {key.toUpperCase()}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+              <Text
+                style={[styles.tabText, league === key && styles.activeTabText]}
+              >
+                {key.toUpperCase()}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
 
       {/* Games List */}
       <FlatList
@@ -156,20 +158,26 @@ const styles = StyleSheet.create({
   score: { fontSize: 16, color: "white", fontWeight: "bold" },
   status: { fontSize: 12, color: "green", marginTop: 10 },
 
-  tabs: {
-    flexDirection: "row",
+  tabsWrapper: {
+    height: 64,
+    maxHeight: 64,
+    justifyContent: "center",
+  },
+
+  tabsContent: {
+    alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 8,
   },
 
   tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    width: 64,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
     marginRight: 8,
     borderRadius: 20,
     backgroundColor: "#eee",
   },
-
   activeTab: { backgroundColor: "#000" },
 
   tabText: { fontSize: 13, fontWeight: "600", color: "#666" },
