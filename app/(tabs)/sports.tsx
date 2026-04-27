@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   FlatList,
@@ -33,9 +34,15 @@ export default function SportsScreen() {
     nhl: { sport: "hockey", league: "nhl" },
   };
 
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
+
   useEffect(() => {
     const selected = sports[league as keyof typeof sports];
     setLoading(true);
+
     fetch(
       `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
     )
@@ -60,12 +67,14 @@ export default function SportsScreen() {
       </View>
     );
 
-  <TouchableOpacity onPress={() => supabase.auth.signOut()}>
-    <Text>Log out</Text>
-  </TouchableOpacity>;
-
   return (
     <View style={{ flex: 1 }}>
+      {/* Logout Button */}
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+        <Text style={styles.logoutText}>Log Out</Text>
+      </TouchableOpacity>
+
+      {/* League Tabs */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -86,6 +95,7 @@ export default function SportsScreen() {
         ))}
       </ScrollView>
 
+      {/* Games List */}
       <FlatList
         data={games}
         keyExtractor={(item) => item.id}
@@ -116,17 +126,42 @@ export default function SportsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", justifyContent: "center" },
-  card: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#ccc" },
+
+  logoutButton: {
+    backgroundColor: "#000",
+    padding: 12,
+    margin: 12,
+    borderRadius: 8,
+    alignItems: "center",
+  },
+
+  logoutText: {
+    color: "white",
+    fontWeight: "bold",
+  },
+
+  card: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#ccc",
+  },
+
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 4,
   },
+
   team: { fontSize: 16, color: "white" },
   score: { fontSize: 16, color: "white", fontWeight: "bold" },
   status: { fontSize: 12, color: "green", marginTop: 10 },
-  boxscore: { fontSize: 14, color: "yellow" },
-  tabs: { flexDirection: "row", paddingHorizontal: 12, paddingVertical: 8 },
+
+  tabs: {
+    flexDirection: "row",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+
   tab: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -134,7 +169,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "#eee",
   },
+
   activeTab: { backgroundColor: "#000" },
+
   tabText: { fontSize: 13, fontWeight: "600", color: "#666" },
   activeTabText: { color: "#fff" },
 });

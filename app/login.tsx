@@ -1,3 +1,4 @@
+import { router } from "expo-router";
 import { useState } from "react";
 import {
     StyleSheet,
@@ -14,11 +15,19 @@ export default function LoginScreen() {
   const [error, setError] = useState("");
 
   const handleLogin = async () => {
+    setError("");
+
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
-    if (error) setError(error.message);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    router.replace("/(tabs)/sports" as any);
   };
 
   const handleSignUp = async () => {
@@ -44,11 +53,11 @@ export default function LoginScreen() {
         onChangeText={setPassword}
         secureTextEntry
       />
+      <TouchableOpacity onPress={() => router.push("/signup")}>
+        <Text>Don&apos;t have an account? Sign up</Text>
+      </TouchableOpacity>
       <TouchableOpacity style={styles.button} onPress={handleLogin}>
         <Text style={styles.buttonText}>Log In</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={handleSignUp}>
-        <Text style={styles.link}>Don't have an account? Sign up</Text>
       </TouchableOpacity>
     </View>
   );
