@@ -7,11 +7,16 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { supabase } from "../../services/supabase";
 
 export default function SportsScreen() {
   const [selectedLeague, setSelectedLeague] = useState("NBA");
   const [selectedDay, setSelectedDay] = useState("Mon");
   const router = useRouter();
+
+  <TouchableOpacity onPress={() => supabase.auth.signOut()}>
+    <Text>Log out</Text>
+  </TouchableOpacity>;
 
   return (
     <View style={styles.container}>
