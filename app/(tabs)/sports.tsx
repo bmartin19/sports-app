@@ -1,6 +1,6 @@
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  FlatList,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,122 +9,132 @@ import {
 } from "react-native";
 import { supabase } from "../../services/supabase";
 
+type Team = {
+  team: { displayName: string };
+  score: string;
+};
+
+type Game = {
+  id: string;
+  status: { type: { description: string; state: string } };
+  competitions: { competitors: Team[] }[];
+};
+
 export default function SportsScreen() {
-  const [selectedLeague, setSelectedLeague] = useState("NBA");
-  const [selectedDay, setSelectedDay] = useState("Mon");
-  const router = useRouter();
+  const [games, setGames] = useState<Game[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [league, setLeague] = useState("nba");
+
+  const sports = {
+    nba: { sport: "basketball", league: "nba" },
+    nfl: { sport: "football", league: "nfl" },
+    mlb: { sport: "baseball", league: "mlb" },
+    wnba: { sport: "basketball", league: "wnba" },
+    nhl: { sport: "hockey", league: "nhl" },
+  };
+
+  useEffect(() => {
+    const selected = sports[league as keyof typeof sports];
+    setLoading(true);
+    fetch(
+      `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        setGames(data.events || []);
+        setLoading(false);
+      });
+  }, [league]);
+
+  if (loading)
+    return (
+      <View style={styles.container}>
+        <Text>Loading...</Text>
+      </View>
+    );
+
+  if (games.length === 0)
+    return (
+      <View style={styles.container}>
+        <Text>No games today</Text>
+      </View>
+    );
 
   <TouchableOpacity onPress={() => supabase.auth.signOut()}>
     <Text>Log out</Text>
   </TouchableOpacity>;
 
   return (
-    <View style={styles.container}>
-      {/* League Tabs */}
-      <View style={styles.leagueRow}>
-        {["NBA", "NFL", "MLB"].map((league) => (
-          <TouchableOpacity
-            key={league}
-            onPress={() => setSelectedLeague(league)}
-          >
-            <Text
-              style={[
-                styles.league,
-                selectedLeague === league && styles.activeTab,
-              ]}
-            >
-              {league}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Date Tabs */}
+    <View style={{ flex: 1 }}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        style={styles.dateRow}
+        style={styles.tabs}
       >
-        {["Mon", "Tue", "Wed", "Thu", "Fri"].map((day) => (
-          <TouchableOpacity key={day} onPress={() => setSelectedDay(day)}>
+        {Object.keys(sports).map((key) => (
+          <TouchableOpacity
+            key={key}
+            onPress={() => setLeague(key)}
+            style={[styles.tab, league === key && styles.activeTab]}
+          >
             <Text
-              style={[styles.date, selectedDay === day && styles.activeTab]}
+              style={[styles.tabText, league === key && styles.activeTabText]}
             >
-              {day}
+              {key.toUpperCase()}
             </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      {/* Game Cards */}
-      <ScrollView>
-        <TouchableOpacity onPress={() => router.push("/game/[id]")}>
-          <View style={styles.card}>
-            <Text style={styles.cardText}>Lakers vs Warriors</Text>
-            <Text style={styles.cardText}>102 - 98</Text>
-            <Text style={styles.cardSub}>Final</Text>
-          </View>
-        </TouchableOpacity>
+      <FlatList
+        data={games}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => {
+          const competitors = item.competitions[0].competitors;
+          const home = competitors[0];
+          const away = competitors[1];
+          const status = item.status.type.description;
 
-        <TouchableOpacity onPress={() => router.push("/game/[id]")}>
-          <View style={styles.card}>
-            <Text style={styles.cardText}>Celtics vs Heat</Text>
-            <Text style={styles.cardText}>88 - 90</Text>
-            <Text style={styles.cardSub}>Q4</Text>
-          </View>
-        </TouchableOpacity>
-      </ScrollView>
+          return (
+            <View style={styles.card}>
+              <View style={styles.row}>
+                <Text style={styles.team}>{away?.team.displayName}</Text>
+                <Text style={styles.score}>{away?.score ?? "-"}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.team}>{home?.team.displayName}</Text>
+                <Text style={styles.score}>{home?.score ?? "-"}</Text>
+              </View>
+              <Text style={styles.status}>{status}</Text>
+            </View>
+          );
+        }}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0B0B0B",
-    paddingTop: 50,
-  },
-
-  leagueRow: {
+  container: { flex: 1, alignItems: "center", justifyContent: "center" },
+  card: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#ccc" },
+  row: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 10,
+    justifyContent: "space-between",
+    marginBottom: 4,
   },
-
-  league: {
-    color: "white",
-    fontSize: 18,
+  team: { fontSize: 16, color: "white" },
+  score: { fontSize: 16, color: "white", fontWeight: "bold" },
+  status: { fontSize: 12, color: "green", marginTop: 10 },
+  boxscore: { fontSize: 14, color: "yellow" },
+  tabs: { flexDirection: "row", paddingHorizontal: 12, paddingVertical: 8 },
+  tab: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: "#eee",
   },
-
-  activeTab: {
-    color: "#00FFAA",
-    fontWeight: "bold",
-  },
-
-  dateRow: {
-    paddingVertical: 10,
-    paddingLeft: 10,
-  },
-
-  date: {
-    color: "gray",
-    marginRight: 15,
-    fontSize: 16,
-  },
-
-  card: {
-    backgroundColor: "#1A1A1A",
-    margin: 10,
-    padding: 15,
-    borderRadius: 10,
-  },
-
-  cardText: {
-    color: "white",
-    fontSize: 16,
-  },
-
-  cardSub: {
-    color: "gray",
-  },
+  activeTab: { backgroundColor: "#000" },
+  tabText: { fontSize: 13, fontWeight: "600", color: "#666" },
+  activeTabText: { color: "#fff" },
 });
