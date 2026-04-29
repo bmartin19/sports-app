@@ -178,8 +178,8 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: "#eee",
   },
-  activeTab: { backgroundColor: "#000" },
+  activeTab: { backgroundColor: "#16fd16" },
 
   tabText: { fontSize: 13, fontWeight: "600", color: "#666" },
-  activeTabText: { color: "#fff" },
+  activeTabText: { color: "#ffffff" },
 });

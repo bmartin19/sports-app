@@ -2,12 +2,13 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { supabase } from "../services/supabase";
 
@@ -18,7 +19,9 @@ export default function SignUpScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   function formatDate(date: Date) {
     return date.toISOString().split("T")[0];
@@ -26,8 +29,12 @@ export default function SignUpScreen() {
 
   async function handleSignUp() {
     setErrorMessage("");
+    setSuccessMessage("");
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
 
     if (error) {
       setErrorMessage(error.message);
@@ -52,14 +59,21 @@ export default function SignUpScreen() {
       }
     }
 
-    setErrorMessage("User registered! You can now log in.");
-    router.replace("/login");
+    setSuccessMessage("Account created! Redirecting to login...");
+
+    setTimeout(() => {
+      router.replace("/login");
+    }, 1000);
   }
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Create Account</Text>
+
       {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+      {successMessage ? (
+        <Text style={styles.success}>{successMessage}</Text>
+      ) : null}
 
       <TextInput
         style={styles.input}
@@ -100,6 +114,7 @@ export default function SignUpScreen() {
               display="default"
               onChange={(event, selectedDate) => {
                 setShowDatePicker(false);
+
                 if (selectedDate) {
                   setBirthday(selectedDate);
                 }
@@ -129,15 +144,23 @@ export default function SignUpScreen() {
         <Text style={styles.buttonText}>Sign Up</Text>
       </TouchableOpacity>
 
-      <TouchableOpacity onPress={() => router.push("/login")}>
-        <Text style={styles.link}>Already have an account? Log in</Text>
-      </TouchableOpacity>
+      <Pressable
+        style={styles.linkContainer}
+        onPress={() => router.push("/login")}
+      >
+        {({ hovered }) => (
+          <Text style={[styles.link, hovered && styles.linkHover]}>
+            Already have an account? Log in
+          </Text>
+        )}
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   error: { color: "red", marginBottom: 12, textAlign: "center" },
+  success: { color: "green", marginBottom: 12, textAlign: "center" },
   container: {
     flex: 1,
     justifyContent: "center",
@@ -157,7 +180,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   button: {
-    backgroundColor: "#111",
+    backgroundColor: "#7d68da",
     padding: 15,
     borderRadius: 10,
     marginTop: 8,
@@ -167,9 +190,17 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontWeight: "bold",
   },
+  linkContainer: {
+    alignSelf: "center",
+    marginTop: 12,
+  },
+
   link: {
-    textAlign: "center",
-    marginTop: 18,
-    color: "blue",
+    color: "#007bff",
+    fontWeight: "500",
+  },
+
+  linkHover: {
+    color: "#0056b3",
   },
 });

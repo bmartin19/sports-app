@@ -1,11 +1,12 @@
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { supabase } from "../services/supabase";
 
@@ -13,9 +14,11 @@ export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const handleLogin = async () => {
     setError("");
+    setSuccessMessage("");
 
     const { error } = await supabase.auth.signInWithPassword({
       email,
@@ -27,18 +30,22 @@ export default function LoginScreen() {
       return;
     }
 
-    router.replace("/(tabs)/sports" as any);
-  };
+    setSuccessMessage("Login successful...");
 
-  const handleSignUp = async () => {
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) setError(error.message);
+    setTimeout(() => {
+      router.replace("/(tabs)/sports" as any);
+    }, 1000);
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>My Sports App</Text>
+      <Text style={styles.title}>Sportfolio</Text>
+
       {error ? <Text style={styles.error}>{error}</Text> : null}
+      {successMessage ? (
+        <Text style={styles.success}>{successMessage}</Text>
+      ) : null}
+
       <TextInput
         style={styles.input}
         placeholder="Email"
@@ -46,6 +53,7 @@ export default function LoginScreen() {
         onChangeText={setEmail}
         autoCapitalize="none"
       />
+
       <TextInput
         style={styles.input}
         placeholder="Password"
@@ -53,9 +61,18 @@ export default function LoginScreen() {
         onChangeText={setPassword}
         secureTextEntry
       />
-      <TouchableOpacity onPress={() => router.push("/signup")}>
-        <Text>Don&apos;t have an account? Sign up</Text>
-      </TouchableOpacity>
+
+      <Pressable
+        style={styles.linkContainer}
+        onPress={() => router.push("/signup")}
+      >
+        {({ hovered }) => (
+          <Text style={[styles.link, hovered && styles.linkHover]}>
+            Don&apos;t have an account? Sign up
+          </Text>
+        )}
+      </Pressable>
+
       <TouchableOpacity style={styles.button} onPress={handleLogin}>
         <Text style={styles.buttonText}>Log In</Text>
       </TouchableOpacity>
@@ -79,13 +96,33 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   button: {
-    backgroundColor: "#000",
+    backgroundColor: "#7d68da",
     padding: 14,
     borderRadius: 8,
     alignItems: "center",
+    marginTop: 12,
     marginBottom: 12,
   },
   buttonText: { color: "#fff", fontWeight: "600" },
-  link: { textAlign: "center", color: "#666" },
   error: { color: "red", marginBottom: 12, textAlign: "center" },
+  success: { color: "green", marginBottom: 12, textAlign: "center" },
+
+  linkText: {
+    textAlign: "center",
+    marginTop: 12,
+    color: "#444",
+  },
+
+  link: {
+    color: "#007bff",
+    fontWeight: "600",
+  },
+
+  linkContainer: {
+    alignSelf: "center",
+    marginTop: 12,
+  },
+  linkHover: {
+    color: "#0056b3", // darker blue on hover
+  },
 });
