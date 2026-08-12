@@ -25,6 +25,7 @@ export default function SportsScreen() {
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
   const [league, setLeague] = useState("nba");
+  const [selectedDate, setSelectedDate] = useState("");
 
   const sports = {
     nba: { sport: "basketball", league: "nba" },
@@ -34,6 +35,27 @@ export default function SportsScreen() {
     nhl: { sport: "hockey", league: "nhl" },
   };
 
+  function getDateRange() {
+    const dates = [];
+    for (let i = -3; i <= 3; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      dates.push(d);
+    }
+    return dates;
+  }
+
+  function formatDateParameters(date: Date) {
+    return date.toISOString().slice(0, 10).replace(/-/g, "");
+  }
+
+  function formatDateLabel(date: Date) {
+    const today = new Date();
+    if (formatDateParameters(date) === formatDateParameters(today))
+      return "Today";
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+
   async function handleLogout() {
     await supabase.auth.signOut();
     router.replace("/login");
@@ -41,17 +63,33 @@ export default function SportsScreen() {
 
   useEffect(() => {
     const selected = sports[league as keyof typeof sports];
-    setLoading(true);
 
-    fetch(
-      `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
-    )
-      .then((res) => res.json())
-      .then((data) => {
-        setGames(data.events || []);
-        setLoading(false);
-      });
-  }, [league]);
+    async function fetchGames() {
+      const dateParameters = selectedDate || formatDateParameters(new Date());
+      const res = await fetch(
+        `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${dateParameters}`,
+      );
+      const data = await res.json();
+
+      //if no games today
+      if (!data.events || data.events.length === 0) {
+        const fallbackRes = await fetch(
+          `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
+        );
+        const fallbackData = await fallbackRes.json();
+        setGames(fallbackData.events || []);
+      } else {
+        setGames(data.events);
+      }
+      setLoading(false);
+    }
+
+    fetchGames();
+
+    const interval = setInterval(fetchGames, 30000);
+
+    return () => clearInterval(interval);
+  }, [league, selectedDate]);
 
   if (loading)
     return (
@@ -96,6 +134,34 @@ export default function SportsScreen() {
           ))}
         </ScrollView>
       </View>
+
+      {/* Scrollable Date bar */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.tabsContent}
+        style={{ maxHeight: 48 }}
+      >
+        {getDateRange().map((date) => {
+          const param = formatDateParameters(date);
+          const isSelected =
+            selectedDate === param ||
+            (selectedDate === "" && param === formatDateParameters(new Date()));
+          return (
+            <TouchableOpacity
+              key={param}
+              onPress={() => setSelectedDate(param)}
+              style={[styles.tab, isSelected && styles.activeTab]}
+            >
+              <Text
+                style={[styles.tabText, isSelected && styles.activeTabText]}
+              >
+                {formatDateLabel(date)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       {/* Games List */}
       <FlatList
