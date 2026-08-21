@@ -78,6 +78,7 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Username"
+        placeholderTextColor={"#888"}
         value={username}
         onChangeText={setUsername}
       />
@@ -86,6 +87,7 @@ export default function SignUpScreen() {
         <TextInput
           style={styles.input}
           placeholder="Birthday (YYYY-MM-DD)"
+          placeholderTextColor={"#888"}
           value={birthdayText}
           onChangeText={(text) => {
             setBirthdayText(text);
@@ -127,6 +129,7 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Email"
+        placeholderTextColor={"#888"}
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -135,6 +138,7 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Password"
+        placeholderTextColor={"#888"}
         value={password}
         onChangeText={setPassword}
         secureTextEntry
@@ -165,19 +169,23 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 24,
+    backgroundColor: "#000000",
   },
   title: {
     fontSize: 28,
     fontWeight: "bold",
     marginBottom: 24,
     textAlign: "center",
+    color: "#ffffff",
   },
   input: {
     borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 14,
+    borderColor: "#555",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: "#1e1e1e",
+    color: "#ffffff",
   },
   button: {
     backgroundColor: "#7d68da",
