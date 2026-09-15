@@ -69,7 +69,7 @@ export default function SportsScreen() {
       const todayStr = formatDateParameters(new Date());
 
       const pastDate = new Date();
-      pastDate.setDate(pastDate.getDate() - 10);
+      pastDate.setDate(pastDate.getDate() - 30);
       const futureDate = new Date();
       futureDate.setDate(futureDate.getDate() + 10);
 
@@ -256,17 +256,21 @@ export default function SportsScreen() {
             const status = item.status.type.description;
 
             return (
-              <View style={styles.card}>
-                <View style={styles.row}>
-                  <Text style={styles.team}>{away?.team.displayName}</Text>
-                  <Text style={styles.score}>{away?.score ?? "-"}</Text>
+              <TouchableOpacity
+                onPress={() => router.push(`/game/${item.id}` as any)}
+              >
+                <View style={styles.card}>
+                  <View style={styles.row}>
+                    <Text style={styles.team}>{away?.team.displayName}</Text>
+                    <Text style={styles.score}>{away?.score ?? "-"}</Text>
+                  </View>
+                  <View style={styles.row}>
+                    <Text style={styles.team}>{home?.team.displayName}</Text>
+                    <Text style={styles.score}>{home?.score ?? "-"}</Text>
+                  </View>
+                  <Text style={styles.status}>{status}</Text>
                 </View>
-                <View style={styles.row}>
-                  <Text style={styles.team}>{home?.team.displayName}</Text>
-                  <Text style={styles.score}>{home?.score ?? "-"}</Text>
-                </View>
-                <Text style={styles.status}>{status}</Text>
-              </View>
+              </TouchableOpacity>
             );
           }}
         />
