@@ -1,26 +1,166 @@
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from "react-native";
-import { supabase } from "../../services/supabase";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Team = {
-  team: { displayName: string };
+  homeAway: "home" | "away";
+  winner?: boolean;
   score: string;
+  team: { displayName: string; abbreviation: string; logo?: string };
+  records?: { type?: string; summary: string }[];
 };
 
 type Game = {
   id: string;
-  status: { type: { description: string; state: string } };
+  date: string;
+  status: {
+    type: {
+      description: string;
+      detail: string;
+      shortDetail: string;
+      state: string;
+    };
+  };
   competitions: { competitors: Team[] }[];
 };
+
+function formatGameTime(dateStr: string) {
+  return new Date(dateStr).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getRecord(t: Team) {
+  return (
+    (t.records?.find((r) => r.type === "total") ?? t.records?.[0])?.summary ??
+    ""
+  );
+}
+
+function TeamBadge({
+  t,
+  big,
+  showRecord,
+}: {
+  t: Team;
+  big: boolean;
+  showRecord: boolean;
+}) {
+  return (
+    <View style={styles.teamCol}>
+      {t.team.logo ? (
+        <Image
+          source={{ uri: t.team.logo }}
+          style={big ? styles.logoBig : styles.logo}
+          resizeMode="contain"
+        />
+      ) : (
+        <View style={big ? styles.logoBig : styles.logo} />
+      )}
+      <Text style={styles.teamName} numberOfLines={1}>
+        {t.team.abbreviation}
+      </Text>
+      {showRecord && (
+        <Text style={styles.teamRecord} numberOfLines={1}>
+          {getRecord(t)}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function SideValue({
+  t,
+  isPre,
+  isPost,
+  big,
+}: {
+  t: Team;
+  isPre: boolean;
+  isPost: boolean;
+  big: boolean;
+}) {
+  if (isPre) {
+    return (
+      <View style={styles.valueCol}>
+        <Text style={styles.record} numberOfLines={1} adjustsFontSizeToFit>
+          {getRecord(t)}
+        </Text>
+      </View>
+    );
+  }
+  const lost = isPost && t.winner === false;
+  return (
+    <View style={styles.valueCol}>
+      <Text
+        style={[styles.score, big && styles.scoreBig, lost && styles.scoreLost]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {t.score ?? "-"}
+      </Text>
+    </View>
+  );
+}
+
+function GameCard({ game }: { game: Game }) {
+  const { width } = useWindowDimensions();
+  const big = width >= 800;
+
+  const competitors = game.competitions[0].competitors;
+  const away = competitors.find((c) => c.homeAway === "away") ?? competitors[1];
+  const home = competitors.find((c) => c.homeAway === "home") ?? competitors[0];
+
+  const state = game.status.type.state; // "pre" | "in" | "post"
+  const isPre = state === "pre";
+  const isLive = state === "in";
+  const isPost = state === "post";
+
+  // pre: start time, live: "5:32 - 2nd" / "Top 5th" / "Halftime", post: "Final"
+  const centerText = isPre
+    ? formatGameTime(game.date)
+    : game.status.type.shortDetail;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={styles.card}
+      onPress={() => router.push(`/game/${game.id}` as any)}
+    >
+      <TeamBadge t={away} big={big} showRecord={!isPre} />
+      <SideValue t={away} isPre={isPre} isPost={isPost} big={big} />
+
+      <View style={styles.centerCol}>
+        <Text
+          style={[
+            styles.centerText,
+            big && styles.centerTextBig,
+            isLive && styles.centerTextLive,
+          ]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
+          {centerText}
+        </Text>
+      </View>
+
+      <SideValue t={home} isPre={isPre} isPost={isPost} big={big} />
+      <TeamBadge t={home} big={big} showRecord={!isPre} />
+    </TouchableOpacity>
+  );
+}
 
 export default function SportsScreen() {
   const [games, setGames] = useState<Game[]>([]);
@@ -38,10 +178,14 @@ export default function SportsScreen() {
     nhl: { sport: "hockey", league: "nhl" },
   };
 
+  const dateScrollRef = useRef<ScrollView>(null);
+  const { width: screenWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
   function formatDateParameters(date: Date) {
-    const y = date.getUTCFullYear();
-    const m = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const d = String(date.getUTCDate()).padStart(2, "0");
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
     return `${y}${m}${d}`;
   }
 
@@ -55,11 +199,6 @@ export default function SportsScreen() {
     return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.replace("/login");
-  }
-
   async function fetchAvailableDates(selected: {
     sport: string;
     league: string;
@@ -68,23 +207,14 @@ export default function SportsScreen() {
     try {
       const todayStr = formatDateParameters(new Date());
 
-      const pastDate = new Date();
-      pastDate.setDate(pastDate.getDate() - 30);
-      const futureDate = new Date();
-      futureDate.setDate(futureDate.getDate() + 10);
-
-      const pastStr = formatDateParameters(pastDate);
-      const futureStr = formatDateParameters(futureDate);
-
+      // fetch current scoreboard with no date filter
       const res = await fetch(
-        `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${pastStr}-${futureStr}&limit=500`,
+        `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
       );
       const data = await res.json();
 
-      //ESPN calendar dates returned
+      // get dates from today's events
       const calendarDates: string[] = [];
-
-      //method 1
       if (data.events && data.events.length > 0) {
         data.events.forEach((event: any) => {
           if (event.date) {
@@ -93,44 +223,27 @@ export default function SportsScreen() {
         });
       }
 
-      console.log("dates found:", calendarDates.length, calendarDates);
+      // always generate ±14 days around today regardless
+      // this ensures the date bar always has dates to show
+      for (let i = -14; i <= 14; i++) {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        calendarDates.push(formatDateParameters(d));
+      }
 
-      //remove duplicates
       const unique = [...new Set(calendarDates)].sort();
 
-      //10 after, 10 before
-
-      if (unique.length === 0) {
-        setAvailableDates([todayStr]);
-        setSelectedDate(todayStr);
-        setDatesLoading(false);
-        return;
-      }
-
       setAvailableDates(unique);
-
-      //default to today or closest dates
-      if (unique.includes(todayStr)) {
-        setSelectedDate(todayStr);
-      } else {
-        const closest = unique.reduce((prev, curr) =>
-          Math.abs(parseInt(curr) - parseInt(todayStr)) <
-          Math.abs(parseInt(prev) - parseInt(todayStr))
-            ? curr
-            : prev,
-        );
-        setSelectedDate(closest);
-      }
+      setSelectedDate(todayStr);
     } catch (e) {
       console.log("fetchAvailableDates error:", e);
       const todayStr = formatDateParameters(new Date());
       const dates = [];
-      for (let i = -10; i <= 10; i++) {
+      for (let i = -14; i <= 14; i++) {
         const d = new Date();
         d.setDate(d.getDate() + i);
         dates.push(formatDateParameters(d));
       }
-
       setAvailableDates(dates);
       setSelectedDate(todayStr);
     }
@@ -150,17 +263,12 @@ export default function SportsScreen() {
     const selected = sports[league as keyof typeof sports];
 
     async function fetchGames() {
+      setGamesLoading(true);
       try {
         const res = await fetch(
           `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${selectedDate}`,
         );
         const data = await res.json();
-        console.log(
-          "games fetched: ",
-          data.events?.length,
-          "for date:",
-          selectedDate,
-        );
         setGames(data.events || []);
       } catch (e) {
         console.log("fetchGames error:", e);
@@ -170,17 +278,68 @@ export default function SportsScreen() {
     }
 
     fetchGames();
-    const interval = setInterval(fetchGames, 30000);
+
+    // only poll if the selected date is today
+    // no point refreshing past or future dates
+    const todayStr = formatDateParameters(new Date());
+    if (selectedDate !== todayStr) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${selectedDate}`,
+        );
+        const data = await res.json();
+        const events = data.events || [];
+
+        // only update state if there are live games on this sport/tab
+        const hasLiveGames = events.some(
+          (event: any) => event.status?.type?.state === "in",
+        );
+
+        if (hasLiveGames) {
+          setGames(events);
+        }
+      } catch (e) {
+        console.log("polling error:", e);
+      }
+    }, 30000);
+
     return () => clearInterval(interval);
   }, [selectedDate, league]);
 
+  useEffect(() => {
+    if (availableDates.length === 0) return;
+
+    const todayStr = formatDateParameters(new Date());
+    const index = availableDates.indexOf(todayStr);
+    if (index === -1) return;
+
+    // each tab is 56 wide + 6 margin = 62, plus 12 of left padding
+    const tabCenter = 12 + index * 62 + 28;
+    const x = Math.max(0, tabCenter - screenWidth / 2);
+
+    // small delay so the tabs have rendered before we scroll
+    const timer = setTimeout(() => {
+      dateScrollRef.current?.scrollTo({ x, animated: false });
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [availableDates, screenWidth]);
+
   return (
     <View style={{ flex: 1 }}>
-      {/* Logout Button */}
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Log Out</Text>
-      </TouchableOpacity>
-
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Text style={styles.appName}>Sportfolio</Text>
+        <TouchableOpacity
+          onPress={() => router.push("/profile" as any)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>U</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
       {/* League Tabs */}
       <View style={styles.tabsWrapper}>
         <ScrollView
@@ -210,6 +369,7 @@ export default function SportsScreen() {
       {/* Scrollable Date bar */}
       <View style={styles.dateWrapper}>
         <ScrollView
+          ref={dateScrollRef}
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.tabsContent}
@@ -249,30 +409,8 @@ export default function SportsScreen() {
         <FlatList
           data={games}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => {
-            const competitors = item.competitions[0].competitors;
-            const home = competitors[0];
-            const away = competitors[1];
-            const status = item.status.type.description;
-
-            return (
-              <TouchableOpacity
-                onPress={() => router.push(`/game/${item.id}` as any)}
-              >
-                <View style={styles.card}>
-                  <View style={styles.row}>
-                    <Text style={styles.team}>{away?.team.displayName}</Text>
-                    <Text style={styles.score}>{away?.score ?? "-"}</Text>
-                  </View>
-                  <View style={styles.row}>
-                    <Text style={styles.team}>{home?.team.displayName}</Text>
-                    <Text style={styles.score}>{home?.score ?? "-"}</Text>
-                  </View>
-                  <Text style={styles.status}>{status}</Text>
-                </View>
-              </TouchableOpacity>
-            );
-          }}
+          renderItem={({ item }) => <GameCard game={item} />}
+          contentContainerStyle={{ paddingVertical: 8, paddingBottom: 32 }}
         />
       )}
     </View>
@@ -283,25 +421,38 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", justifyContent: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
-  logoutButton: {
-    backgroundColor: "#000",
-    padding: 12,
-    margin: 12,
-    borderRadius: 8,
-    alignItems: "center",
-  },
+  logoBig: { width: 72, height: 72 },
+  scoreBig: { fontSize: 40 },
+  centerTextBig: { fontSize: 18 },
+  teamRecord: { color: "#6b6b70", fontSize: 11, marginTop: 1 },
 
-  logoutText: { color: "white", fontWeight: "bold" },
-
-  card: { padding: 16, borderBottomWidth: 1, borderBottomColor: "#ccc" },
-  row: {
+  card: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 4,
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    marginHorizontal: 12,
+    marginVertical: 5,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
   },
-  team: { fontSize: 16, color: "white" },
-  score: { fontSize: 16, color: "white", fontWeight: "bold" },
-  status: { fontSize: 12, color: "green", marginTop: 10 },
+  teamCol: { width: 64, alignItems: "center" },
+  logo: { width: 48, height: 48 },
+  teamName: { color: "#9a9a9f", fontSize: 12, fontWeight: "600", marginTop: 4 },
+
+  valueCol: { flex: 1, alignItems: "center", justifyContent: "center" },
+  score: { color: "white", fontSize: 30, fontWeight: "700" },
+  scoreLost: { color: "#6b6b70" },
+  record: { color: "#9a9a9f", fontSize: 14 },
+
+  centerCol: { flex: 1.3, alignItems: "center", justifyContent: "center" },
+  centerText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  centerTextLive: { color: "#ff4d4d" },
 
   //league tabs
   tabsWrapper: { height: 64, justifyContent: "center" },
@@ -334,4 +485,25 @@ const styles = StyleSheet.create({
 
   activeTab: { backgroundColor: "#16fd16" },
   activeTabText: { color: "#ffffff" },
+
+  statusLive: { color: "#ff4d4d", fontWeight: "600" },
+  statusPre: { color: "#888" },
+
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  appName: { color: "white", fontSize: 24, fontWeight: "800" },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#16fd16",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  avatarText: { color: "#000", fontWeight: "700", fontSize: 16 },
 });
