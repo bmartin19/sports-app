@@ -115,7 +115,7 @@ function SideValue({
   );
 }
 
-function GameCard({ game }: { game: Game }) {
+function GameCard({ game, league }: { game: Game; league: string }) {
   const { width } = useWindowDimensions();
   const big = width >= 800;
 
@@ -137,7 +137,7 @@ function GameCard({ game }: { game: Game }) {
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.card}
-      onPress={() => router.push(`/game/${game.id}` as any)}
+      onPress={() => router.push(`/game/${game.id}?league=${league}` as any)}
     >
       <TeamBadge t={away} big={big} showRecord={!isPre} />
       <SideValue t={away} isPre={isPre} isPost={isPost} big={big} />
@@ -409,7 +409,7 @@ export default function SportsScreen() {
         <FlatList
           data={games}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <GameCard game={item} />}
+          renderItem={({ item }) => <GameCard game={item} league={league} />}
           contentContainerStyle={{ paddingVertical: 8, paddingBottom: 32 }}
         />
       )}

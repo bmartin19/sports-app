@@ -10,10 +10,119 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+/* ------------------------------------------------------------------ */
+/* League config                                                       */
+/* ------------------------------------------------------------------ */
+
+const LEAGUES: Record<string, { sport: string; league: string }> = {
+  nba: { sport: "basketball", league: "nba" },
+  wnba: { sport: "basketball", league: "wnba" },
+};
+
+/* ------------------------------------------------------------------ */
+/* Box score layout                                                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * "core" columns are the 7 that must fit on screen when the box score
+ * loads. The rest sit off to the right and are reached by scrolling.
+ */
+const STAT_COLUMNS = [
+  { key: "min", label: "MIN", core: true },
+  { key: "pts", label: "PTS", core: true },
+  { key: "reb", label: "REB", core: true },
+  { key: "ast", label: "AST", core: true },
+  { key: "stl", label: "STL", core: true },
+  { key: "blk", label: "BLK", core: true },
+  { key: "pm", label: "+/-", core: true },
+  { key: "fpts", label: "FPTS", core: false },
+  { key: "fg", label: "FG", core: false },
+  { key: "threefg", label: "3FG", core: false },
+  { key: "ft", label: "FT", core: false },
+  { key: "to", label: "TO", core: false },
+  { key: "pf", label: "PF", core: false },
+  { key: "ts", label: "TS%", core: false },
+];
+
+const CORE_COUNT = STAT_COLUMNS.filter((c) => c.core).length;
+const EXTRA_COUNT = STAT_COLUMNS.length - CORE_COUNT;
+
+const NAME_COL_WIDTH = 112;
+const ROW_PADDING = 16; // 8 left + 8 right
+const MIN_CORE_COL_WIDTH = 30;
+const MAX_CORE_COL_WIDTH = 48;
+const EXTRA_COL_WIDTH = 46; // wide enough for "10-15" and "42.6"
+
+/* ------------------------------------------------------------------ */
+/* Fantasy points                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Scoring (FanDuel-style). Change these numbers to use a different
+ * scoring system.
+ */
+const FANTASY_WEIGHTS = {
+  pts: 1,
+  reb: 1.2,
+  ast: 1.5,
+  stl: 3,
+  blk: 3,
+  to: -1,
+};
+
+function calcFantasyPoints(v: Record<string, string>) {
+  // Players who didn't play have "-" for everything
+  if (Number.isNaN(parseFloat(v.pts))) return "-";
+
+  const n = (x: string) => {
+    const num = parseFloat(x);
+    return Number.isNaN(num) ? 0 : num;
+  };
+
+  const total =
+    n(v.pts) * FANTASY_WEIGHTS.pts +
+    n(v.reb) * FANTASY_WEIGHTS.reb +
+    n(v.ast) * FANTASY_WEIGHTS.ast +
+    n(v.stl) * FANTASY_WEIGHTS.stl +
+    n(v.blk) * FANTASY_WEIGHTS.blk +
+    n(v.to) * FANTASY_WEIGHTS.to;
+
+  return (Math.round(total * 10) / 10).toFixed(1);
+}
+
+/* ------------------------------------------------------------------ */
+/* Plus/minus helpers                                                  */
+/* ------------------------------------------------------------------ */
+
+function formatPlusMinus(val: string) {
+  const num = parseInt(val, 10);
+  if (Number.isNaN(num)) return val;
+  return num > 0 ? `+${num}` : String(num);
+}
+
+function plusMinusStyle(val: string) {
+  const num = parseInt(val, 10);
+  if (Number.isNaN(num) || num === 0) return undefined;
+  return num > 0 ? styles.positive : styles.negative;
+}
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
 
 export default function GameScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, league } = useLocalSearchParams<{
+    id: string;
+    league?: string;
+  }>();
   const { width: screenWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+
+  // Falls back to WNBA if no league is passed in (the old behaviour)
+  const leagueKey = (Array.isArray(league) ? league[0] : league) ?? "wnba";
+  const cfg = LEAGUES[leagueKey] ?? LEAGUES.wnba;
 
   const [gameData, setGameData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -26,7 +135,7 @@ export default function GameScreen() {
     async function fetchGame() {
       try {
         const res = await fetch(
-          `http://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary?event=${id}`,
+          `http://site.api.espn.com/apis/site/v2/sports/${cfg.sport}/${cfg.league}/summary?event=${id}`,
         );
 
         const data = await res.json();
@@ -39,7 +148,7 @@ export default function GameScreen() {
     }
 
     fetchGame();
-  }, [id]);
+  }, [id, cfg.sport, cfg.league]);
 
   if (loading) {
     return (
@@ -69,16 +178,52 @@ export default function GameScreen() {
 
   const teams = gameData.boxscore?.players ?? [];
 
+  /*
+   * Column sizing.
+   *
+   * Phones: the 7 core columns share whatever space is left after the
+   * name column, so they all fit on screen. The extra columns have a
+   * fixed width and sit off-screen until the user scrolls.
+   *
+   * Wide screens: if every column can fit at its normal width, they all
+   * share the space equally and no scrolling is needed.
+   */
+  const availWidth = screenWidth - ROW_PADDING - NAME_COL_WIDTH;
+  const fitAllWidth = Math.floor(availWidth / STAT_COLUMNS.length);
+  const isWide = fitAllWidth >= EXTRA_COL_WIDTH;
+
+  const coreColWidth = isWide
+    ? fitAllWidth
+    : Math.min(
+        MAX_CORE_COL_WIDTH,
+        Math.max(MIN_CORE_COL_WIDTH, Math.floor(availWidth / CORE_COUNT)),
+      );
+  const extraColWidth = isWide ? fitAllWidth : EXTRA_COL_WIDTH;
+
+  const tableWidth =
+    ROW_PADDING +
+    NAME_COL_WIDTH +
+    CORE_COUNT * coreColWidth +
+    EXTRA_COUNT * extraColWidth;
+
+  const colWidth = (core: boolean) => (core ? coreColWidth : extraColWidth);
+
+  const getLogo = (c: any) => c?.team?.logo ?? c?.team?.logos?.[0]?.href;
+
   return (
     <View style={styles.container}>
-      {/* Back Button */}
-      <TouchableOpacity onPress={() => router.back()} style={styles.back}>
-        <Text style={styles.green}>← Back</Text>
-      </TouchableOpacity>
-
       {/* Score Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <View style={styles.teamBlock}>
+          {getLogo(away) ? (
+            <Image
+              source={{ uri: getLogo(away) }}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          ) : (
+            <View style={styles.headerLogo} />
+          )}
           <Text style={styles.abbrev}>{away?.team?.abbreviation}</Text>
 
           <Text style={styles.bigScore}>{away?.score ?? "-"}</Text>
@@ -89,6 +234,15 @@ export default function GameScreen() {
         </Text>
 
         <View style={styles.teamBlock}>
+          {getLogo(home) ? (
+            <Image
+              source={{ uri: getLogo(home) }}
+              style={styles.headerLogo}
+              resizeMode="contain"
+            />
+          ) : (
+            <View style={styles.headerLogo} />
+          )}
           <Text style={styles.abbrev}>{home?.team?.abbreviation}</Text>
 
           <Text style={styles.bigScore}>{home?.score ?? "-"}</Text>
@@ -262,29 +416,21 @@ export default function GameScreen() {
 
                 {/* Box Score */}
                 <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                  <View style={{ width: screenWidth }}>
+                  <View style={{ width: tableWidth }}>
                     {/* Stat Header */}
-                    <View
-                      style={[styles.statHeaderRow, { width: screenWidth }]}
-                    >
+                    <View style={[styles.statHeaderRow, { width: tableWidth }]}>
                       <Text style={[styles.nameCol, styles.gray]}>Player</Text>
 
-                      {[
-                        "MIN",
-                        "PTS",
-                        "REB",
-                        "AST",
-                        "STL",
-                        "BLK",
-                        "FG",
-                        "3FG",
-                        "FT",
-                        "TO",
-                        "PF",
-                        "TS%",
-                      ].map((h) => (
-                        <Text key={h} style={[styles.statCol, styles.gray]}>
-                          {h}
+                      {STAT_COLUMNS.map((col) => (
+                        <Text
+                          key={col.key}
+                          style={[
+                            styles.statCol,
+                            styles.gray,
+                            { width: colWidth(col.core) },
+                          ]}
+                        >
+                          {col.label}
                         </Text>
                       ))}
                     </View>
@@ -344,6 +490,8 @@ export default function GameScreen() {
 
                         const blk = statMap["BLK"] ?? statMap["BLOCKS"] ?? "-";
 
+                        const pm = statMap["+/-"] ?? statMap["PM"] ?? "-";
+
                         const fg = statMap["FG"] ?? statMap["FGM-FGA"] ?? "-";
 
                         const threefg =
@@ -389,6 +537,24 @@ export default function GameScreen() {
                           }
                         }
 
+                        // Every value, keyed to match STAT_COLUMNS
+                        const values: Record<string, string> = {
+                          min,
+                          pts,
+                          reb,
+                          ast,
+                          stl,
+                          blk,
+                          pm,
+                          fg,
+                          threefg,
+                          ft,
+                          to,
+                          pf,
+                          ts,
+                        };
+                        values.fpts = calcFantasyPoints(values);
+
                         /*
                          * Use ESPN's headshot URL if it
                          * provides one.
@@ -400,13 +566,13 @@ export default function GameScreen() {
                         } else if (p?.headshot?.href) {
                           headshotUrl = p.headshot.href;
                         } else {
-                          headshotUrl = `https://a.espncdn.com/i/headshots/wnba/players/full/${p.id}.png`;
+                          headshotUrl = `https://a.espncdn.com/i/headshots/${cfg.league}/players/full/${p.id}.png`;
                         }
 
                         return (
                           <View
                             key={p.id}
-                            style={[styles.playerRow, { width: screenWidth }]}
+                            style={[styles.playerRow, { width: tableWidth }]}
                           >
                             {/* Player */}
                             <TouchableOpacity
@@ -430,7 +596,7 @@ export default function GameScreen() {
                               />
 
                               <Text
-                                style={[styles.nameCol, styles.white]}
+                                style={[styles.playerName, styles.white]}
                                 numberOfLines={1}
                               >
                                 {p.shortName ?? p.displayName}
@@ -447,44 +613,30 @@ export default function GameScreen() {
                                     id: p.id,
                                     name: p.displayName,
                                     headshot: headshotUrl,
-                                    min,
-                                    pts,
-                                    reb,
-                                    ast,
-                                    stl,
-                                    blk,
-                                    fg,
-                                    threefg,
-                                    ft,
-                                    to,
-                                    pf,
-                                    ts,
+                                    ...values,
                                   },
                                 } as any)
                               }
                             >
                               <View style={styles.statsRow}>
-                                {[
-                                  min,
-                                  pts,
-                                  reb,
-                                  ast,
-                                  stl,
-                                  blk,
-                                  fg,
-                                  threefg,
-                                  ft,
-                                  to,
-                                  pf,
-                                  ts,
-                                ].map((val, i) => (
-                                  <Text
-                                    key={i}
-                                    style={[styles.statCol, styles.white]}
-                                  >
-                                    {val}
-                                  </Text>
-                                ))}
+                                {STAT_COLUMNS.map((col) => {
+                                  const val = values[col.key];
+                                  const isPm = col.key === "pm";
+
+                                  return (
+                                    <Text
+                                      key={col.key}
+                                      style={[
+                                        styles.statCol,
+                                        styles.white,
+                                        { width: colWidth(col.core) },
+                                        isPm && plusMinusStyle(val),
+                                      ]}
+                                    >
+                                      {isPm ? formatPlusMinus(val) : val}
+                                    </Text>
+                                  );
+                                })}
                               </View>
                             </TouchableOpacity>
                           </View>
@@ -514,11 +666,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  back: {
-    padding: 16,
-    paddingBottom: 4,
-  },
-
   green: {
     color: "#16fd16",
     fontSize: 15,
@@ -530,6 +677,14 @@ const styles = StyleSheet.create({
 
   gray: {
     color: "#666",
+  },
+
+  positive: {
+    color: "#16fd16",
+  },
+
+  negative: {
+    color: "#ff4d4d",
   },
 
   /* Score Header */
@@ -544,6 +699,12 @@ const styles = StyleSheet.create({
 
   teamBlock: {
     alignItems: "center",
+  },
+
+  headerLogo: {
+    width: 56,
+    height: 56,
+    marginBottom: 4,
   },
 
   abbrev: {
@@ -657,7 +818,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: ROW_PADDING / 2,
     borderBottomWidth: 1,
     borderBottomColor: "#333",
   },
@@ -669,20 +830,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#1a1a1a",
     paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingHorizontal: ROW_PADDING / 2,
   },
 
   playerInfo: {
-    width: 120,
+    width: NAME_COL_WIDTH,
     flexDirection: "row",
     alignItems: "center",
   },
 
   headshot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    marginRight: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginRight: 6,
     backgroundColor: "#333",
   },
 
@@ -696,12 +857,16 @@ const styles = StyleSheet.create({
   },
 
   nameCol: {
-    width: 120,
+    width: NAME_COL_WIDTH,
+    fontSize: 12,
+  },
+
+  playerName: {
+    flex: 1,
     fontSize: 12,
   },
 
   statCol: {
-    flex: 1,
     textAlign: "center",
     fontSize: 12,
   },
