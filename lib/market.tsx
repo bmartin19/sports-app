@@ -22,11 +22,14 @@ export function toAsset(r: any): MarketAsset {
   };
 }
 
+export const CURRENCY_SYMBOL = "✦";
+export const CURRENCY_NAME = "Belief Points"; // for labels, e.g. "Balance (Belief Points)"
+
 export const money = (n: number) =>
-  `$${Number(n).toLocaleString("en-US", {
+  `${Number(n).toLocaleString("en-US", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })}`;
+  })} ${CURRENCY_SYMBOL}`;
 
 export const pct = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 

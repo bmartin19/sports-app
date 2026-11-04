@@ -21,12 +21,61 @@ import {
 } from "../../lib/market";
 import { supabase } from "../../services/supabase";
 
+// Must match c_liquidity in execute_trade() in Supabase.
+const LIQUIDITY = 500;
+
+// Name of the timestamp column on the transactions table.
+// Change this if yours is called something else.
+const TX_DATE_COLUMN = "created_at";
+
+// How many transactions to load, and how many to show before "Show all".
+const TX_LOAD_LIMIT = 500;
+const TX_PREVIEW_COUNT = 10;
+
+// What you would actually receive if you sold `q` shares at spot price `p`.
+// (Selling in several smaller orders gives the same total, so this is the
+// true cash-out value of a position.)
+const exitValue = (p: number, q: number) =>
+  p * LIQUIDITY * (1 - Math.exp(-q / LIQUIDITY));
+
+const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}${money(Math.abs(n))}`;
+
+// "Oct 28" (adds the year if it's not this year), optionally with the time
+function formatDate(iso: string, withTime = false) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  const date = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
+  });
+  if (!withTime) return date;
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${date}, ${time}`;
+}
+
 type Holding = {
   quantity: number;
   avg_cost: number;
   asset: MarketAsset;
-  value: number; // quantity x current price
-  profit: number; // vs. what the user paid
+  value: number; // what the position would pay out if sold
+  profit: number; // value minus what the user paid
+  lastBought: string | null; // date of the most recent buy
+};
+
+type Tx = {
+  id: string;
+  side: "buy" | "sell";
+  quantity: number;
+  unit_price: number;
+  total: number;
+  date: string;
+  asset: MarketAsset | null;
+  asset_id: string;
 };
 
 export default function PortfolioScreen() {
@@ -35,7 +84,10 @@ export default function PortfolioScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [cash, setCash] = useState(0);
+  const [realized, setRealized] = useState(0);
   const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [transactions, setTransactions] = useState<Tx[]>([]);
+  const [showAllTx, setShowAllTx] = useState(false);
 
   const load = useCallback(async () => {
     const {
@@ -48,48 +100,89 @@ export default function PortfolioScreen() {
     }
     setSignedIn(true);
 
-    const [prof, rows] = await Promise.all([
+    const [prof, rows, txRows] = await Promise.all([
       supabase
         .from("profiles")
-        .select("cash_balance")
+        .select("cash_balance, realized_pnl")
         .eq("id", session.user.id)
         .maybeSingle(),
       supabase
         .from("holdings")
         .select("asset_id, quantity, avg_cost")
         .eq("user_id", session.user.id),
+      supabase
+        .from("transactions")
+        .select(
+          `id, asset_id, side, quantity, unit_price, total, ${TX_DATE_COLUMN}`,
+        )
+        .eq("user_id", session.user.id)
+        .order(TX_DATE_COLUMN, { ascending: false })
+        .limit(TX_LOAD_LIMIT),
     ]);
     setCash(Number(prof.data?.cash_balance ?? 0));
+    setRealized(Number(prof.data?.realized_pnl ?? 0));
 
     const held = rows.data ?? [];
+    const txData = (txRows.data ?? []) as any[];
+
+    // Load every asset we need to show a name for (held + traded)
+    const assetIds = [
+      ...new Set([
+        ...held.map((h) => h.asset_id),
+        ...txData.map((t) => t.asset_id),
+      ]),
+    ];
     let assets: MarketAsset[] = [];
-    if (held.length) {
+    if (assetIds.length) {
       const { data } = await supabase
         .from("market_assets")
         .select("*")
-        .in(
-          "asset_id",
-          held.map((h) => h.asset_id),
-        );
+        .in("asset_id", assetIds);
       assets = (data ?? []).map(toAsset);
+    }
+    const assetById = new Map(assets.map((a) => [String(a.asset_id), a]));
+
+    // Transactions are newest first, so the first buy we see per asset
+    // is the most recent one.
+    const lastBuy = new Map<string, string>();
+    for (const t of txData) {
+      const key = String(t.asset_id);
+      if (t.side === "buy" && !lastBuy.has(key)) {
+        lastBuy.set(key, t[TX_DATE_COLUMN]);
+      }
     }
 
     const list: Holding[] = [];
     for (const h of held) {
-      const asset = assets.find((a) => a.asset_id === h.asset_id);
+      const asset = assetById.get(String(h.asset_id));
       if (!asset) continue;
       const quantity = Number(h.quantity);
       const avg_cost = Number(h.avg_cost);
+      const value = exitValue(asset.current_price, quantity);
       list.push({
         quantity,
         avg_cost,
         asset,
-        value: quantity * asset.current_price,
-        profit: (asset.current_price - avg_cost) * quantity,
+        value,
+        profit: value - avg_cost * quantity,
+        lastBought: lastBuy.get(String(h.asset_id)) ?? null,
       });
     }
     list.sort((a, b) => b.value - a.value);
     setHoldings(list);
+
+    setTransactions(
+      txData.map((t) => ({
+        id: String(t.id),
+        side: t.side,
+        quantity: Number(t.quantity),
+        unit_price: Number(t.unit_price),
+        total: Number(t.total),
+        date: t[TX_DATE_COLUMN],
+        asset: assetById.get(String(t.asset_id)) ?? null,
+        asset_id: String(t.asset_id),
+      })),
+    );
     setLoading(false);
   }, []);
 
@@ -108,7 +201,12 @@ export default function PortfolioScreen() {
 
   const invested = holdings.reduce((sum, h) => sum + h.value, 0);
   const netWorth = cash + invested;
-  const totalProfit = holdings.reduce((sum, h) => sum + h.profit, 0);
+  const unrealized = holdings.reduce((sum, h) => sum + h.profit, 0);
+  const totalProfit = realized + unrealized;
+
+  const visibleTx = showAllTx
+    ? transactions
+    : transactions.slice(0, TX_PREVIEW_COUNT);
 
   return (
     <View style={{ flex: 1 }}>
@@ -156,15 +254,38 @@ export default function PortfolioScreen() {
                   <Text style={styles.summaryValue}>{money(invested)}</Text>
                 </View>
                 <View>
-                  <Text style={styles.label}>Profit / loss</Text>
+                  <Text style={styles.label}>Total profit</Text>
                   <Text
                     style={[
                       styles.summaryValue,
                       totalProfit >= 0 ? styles.up : styles.down,
                     ]}
                   >
-                    {totalProfit >= 0 ? "+" : "-"}
-                    {money(Math.abs(totalProfit))}
+                    {signedMoney(totalProfit)}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.summaryRow}>
+                <View>
+                  <Text style={styles.label}>Realized (cashed out)</Text>
+                  <Text
+                    style={[
+                      styles.summaryValue,
+                      realized >= 0 ? styles.up : styles.down,
+                    ]}
+                  >
+                    {signedMoney(realized)}
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={styles.label}>Unrealized (still held)</Text>
+                  <Text
+                    style={[
+                      styles.summaryValue,
+                      unrealized >= 0 ? styles.up : styles.down,
+                    ]}
+                  >
+                    {signedMoney(unrealized)}
                   </Text>
                 </View>
               </View>
@@ -204,6 +325,11 @@ export default function PortfolioScreen() {
                         {h.quantity} share{h.quantity === 1 ? "" : "s"} · avg{" "}
                         {money(h.avg_cost)}
                       </Text>
+                      {h.lastBought ? (
+                        <Text style={styles.sub} numberOfLines={1}>
+                          Last bought {formatDate(h.lastBought)}
+                        </Text>
+                      ) : null}
                     </View>
                     <View style={{ alignItems: "flex-end" }}>
                       <Text style={styles.price}>{money(h.value)}</Text>
@@ -219,6 +345,63 @@ export default function PortfolioScreen() {
                   </TouchableOpacity>
                 );
               })
+            )}
+
+            <Text style={styles.sectionTitle}>Transaction history</Text>
+            {transactions.length === 0 ? (
+              <Text style={styles.emptyLeft}>No transactions yet.</Text>
+            ) : (
+              <>
+                {visibleTx.map((t) => (
+                  <TouchableOpacity
+                    key={t.id}
+                    activeOpacity={0.7}
+                    style={styles.row}
+                    disabled={!t.asset}
+                    onPress={() => router.push(`/asset/${t.asset_id}` as any)}
+                  >
+                    <View
+                      style={[
+                        styles.sideBadge,
+                        t.side === "buy" ? styles.buyBadge : styles.sellBadge,
+                      ]}
+                    >
+                      <Text style={styles.sideBadgeText}>
+                        {t.side === "buy" ? "BUY" : "SELL"}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={styles.name} numberOfLines={1}>
+                        {t.asset?.name ?? "Unknown asset"}
+                      </Text>
+                      <Text style={styles.sub} numberOfLines={1}>
+                        {t.quantity} share{t.quantity === 1 ? "" : "s"} @{" "}
+                        {money(t.unit_price)}
+                      </Text>
+                      <Text style={styles.sub} numberOfLines={1}>
+                        {formatDate(t.date, true)}
+                      </Text>
+                    </View>
+                    <Text style={styles.price}>
+                      {t.side === "buy" ? "-" : "+"}
+                      {money(t.total)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                {transactions.length > TX_PREVIEW_COUNT && (
+                  <TouchableOpacity
+                    onPress={() => setShowAllTx((v) => !v)}
+                    activeOpacity={0.7}
+                    style={styles.showMore}
+                  >
+                    <Text style={styles.showMoreText}>
+                      {showAllTx
+                        ? "Show less"
+                        : `Show all (${transactions.length})`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
             )}
           </View>
         </ScrollView>
@@ -275,6 +458,12 @@ const styles = StyleSheet.create({
   up: { color: colors.green },
   down: { color: colors.red },
   empty: { color: colors.muted, fontSize: 14, marginBottom: 12 },
+  emptyLeft: {
+    color: colors.muted,
+    fontSize: 14,
+    marginLeft: 4,
+    marginVertical: 8,
+  },
   button: {
     height: 44,
     paddingHorizontal: 24,
@@ -284,4 +473,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonText: { color: "#000", fontWeight: "800", fontSize: 15 },
+  sideBadge: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  buyBadge: { backgroundColor: colors.green },
+  sellBadge: { backgroundColor: colors.red },
+  sideBadgeText: { color: "#000", fontSize: 11, fontWeight: "800" },
+  showMore: { alignItems: "center", paddingVertical: 12 },
+  showMoreText: { color: colors.green, fontSize: 14, fontWeight: "600" },
 });
