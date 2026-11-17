@@ -21,14 +21,26 @@ import {
 } from "../../lib/market";
 import { supabase } from "../../services/supabase";
 
+// asset + price change in percentage
 type Mover = MarketAsset & { change_pct: number };
 
+//count for the items listed for each section in the market
+const TOP_PLAYERS_COUNT = 10;
+const TOP_TEAMS_COUNT = 5;
+const MOVERS_COUNT = 5;
+const SEARCH_RESULT_LIMIT = 15;
+
+//look back a week for the risers and fallers list
+const MOVERS_DAYS = 7;
+
+const SEARCH_DELAY_MS = 250;
+
 function AssetRow({
-  a,
+  asset,
   rank,
   change,
 }: {
-  a: MarketAsset;
+  asset: MarketAsset;
   rank?: number;
   change?: number;
 }) {
@@ -36,22 +48,22 @@ function AssetRow({
     <TouchableOpacity
       activeOpacity={0.7}
       style={styles.row}
-      onPress={() => router.push(`/asset/${a.asset_id}` as any)}
+      onPress={() => router.push(`/asset/${asset.asset_id}` as any)}
     >
       {rank != null && <Text style={styles.rank}>{rank}</Text>}
-      <Avatar uri={a.image_url} />
+      <Avatar uri={asset.image_url} />
       <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={styles.name} numberOfLines={1}>
-          {a.name}
+          {asset.name}
         </Text>
-        {a.subtitle ? (
+        {asset.subtitle ? (
           <Text style={styles.sub} numberOfLines={1}>
-            {a.subtitle}
+            {asset.subtitle}
           </Text>
         ) : null}
       </View>
       <View style={{ alignItems: "flex-end" }}>
-        <Text style={styles.price}>{money(a.current_price)}</Text>
+        <Text style={styles.price}>{money(asset.current_price)}</Text>
         {change != null && (
           <Text style={[styles.change, change >= 0 ? styles.up : styles.down]}>
             {pct(change)}
@@ -73,60 +85,69 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 export default function MarketScreen() {
   const insets = useSafeAreaInsets();
+
+  // data for the lists
   const [players, setPlayers] = useState<MarketAsset[]>([]);
   const [teams, setTeams] = useState<MarketAsset[]>([]);
   const [risers, setRisers] = useState<Mover[]>([]);
   const [fallers, setFallers] = useState<Mover[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<MarketAsset[] | null>(null);
+  // search box, null when the user hasn't searched
+  const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState<MarketAsset[] | null>(
+    null,
+  );
 
+  // loads everything from Supabase
   const load = useCallback(async () => {
-    const [p, t, m] = await Promise.all([
+    // send all requests at once so it loads faster
+    const [playersResult, teamsResult, moversResult] = await Promise.all([
       supabase
         .from("market_assets")
         .select("*")
         .eq("asset_type", "player")
         .order("current_price", { ascending: false })
-        .limit(10),
+        .limit(TOP_PLAYERS_COUNT),
       supabase
         .from("market_assets")
         .select("*")
         .eq("asset_type", "team")
         .order("current_price", { ascending: false })
-        .limit(5),
-      supabase.rpc("market_movers", { p_days: 7 }),
+        .limit(TOP_TEAMS_COUNT),
+      supabase.rpc("market_movers", { p_days: MOVERS_DAYS }),
     ]);
 
-    if (p.error || t.error) {
-      setError(
+    if (playersResult.error || teamsResult.error) {
+      setErrorMessage(
         "Couldn't load the market. Check your connection and try again.",
       );
     } else {
-      setError("");
-      setPlayers((p.data ?? []).map(toAsset));
-      setTeams((t.data ?? []).map(toAsset));
+      setErrorMessage("");
+      setPlayers((playersResult.data ?? []).map(toAsset));
+      setTeams((teamsResult.data ?? []).map(toAsset));
     }
 
-    const movers: Mover[] = ((m.data ?? []) as any[]).map((r) => ({
-      ...toAsset(r),
-      change_pct: Number(r.change_pct),
+    // turn the raw rows into assets that also have a change_pct number
+    const moverRows = (moversResult.data ?? []) as any[];
+    const allMovers: Mover[] = moverRows.map((row) => ({
+      ...toAsset(row),
+      change_pct: Number(row.change_pct),
     }));
-    setRisers(
-      movers
-        .filter((x) => x.change_pct > 0)
-        .sort((a, b) => b.change_pct - a.change_pct)
-        .slice(0, 5),
-    );
-    setFallers(
-      movers
-        .filter((x) => x.change_pct < 0)
-        .sort((a, b) => a.change_pct - b.change_pct)
-        .slice(0, 5),
-    );
+
+    // risers
+    const rising = allMovers.filter((m) => m.change_pct > 0);
+    rising.sort((a, b) => b.change_pct - a.change_pct);
+    setRisers(rising.slice(0, MOVERS_COUNT));
+
+    // fallers
+    const falling = allMovers.filter((m) => m.change_pct < 0);
+    falling.sort((a, b) => a.change_pct - b.change_pct);
+    setFallers(falling.slice(0, MOVERS_COUNT));
+
     setLoading(false);
   }, []);
 
@@ -134,29 +155,36 @@ export default function MarketScreen() {
     load();
   }, [load]);
 
-  // Search players and teams by name
+  // search for players
   useEffect(() => {
-    const q = query.trim().replace(/[%,()]/g, "");
-    if (q.length < 2) {
-      setResults(null);
+    // remove characters that could mess up the search
+    const cleanText = searchText.trim().replace(/[%,()]/g, "");
+
+    if (cleanText.length < 2) {
+      setSearchResults(null);
       return;
     }
-    let cancelled = false;
-    const timer = setTimeout(async () => {
+
+    let isOutdated = false;
+
+    const delayTimer = setTimeout(async () => {
       const { data } = await supabase
         .from("market_assets")
         .select("*")
-        .ilike("name", `%${q}%`)
+        .ilike("name", `%${cleanText}%`)
         .order("current_price", { ascending: false })
-        .limit(15);
-      if (!cancelled) setResults((data ?? []).map(toAsset));
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [query]);
+        .limit(SEARCH_RESULT_LIMIT);
 
+      if (!isOutdated) {
+        setSearchResults((data ?? []).map(toAsset));
+      }
+    }, SEARCH_DELAY_MS);
+
+    return () => {
+      isOutdated = true;
+      clearTimeout(delayTimer);
+    };
+  }, [searchText]);
   async function onRefresh() {
     setRefreshing(true);
     await load();
@@ -167,8 +195,8 @@ export default function MarketScreen() {
     <View style={{ flex: 1 }}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <TextInput
-          value={query}
-          onChangeText={setQuery}
+          value={searchText}
+          onChangeText={setSearchText}
           placeholder="Search players or teams"
           placeholderTextColor={colors.dim}
           style={styles.search}
@@ -195,29 +223,42 @@ export default function MarketScreen() {
           }
         >
           <View style={styles.column}>
-            {error ? <Text style={styles.empty}>{error}</Text> : null}
+            {errorMessage ? (
+              <Text style={styles.empty}>{errorMessage}</Text>
+            ) : null}
 
-            {results !== null ? (
+            {searchResults !== null ? (
+              // show results for the search
               <Section title="Search results">
-                {results.length === 0 ? (
+                {searchResults.length === 0 ? (
                   <Text style={styles.empty}>
-                    No players or teams match "{query.trim()}".
+                    No players or teams match "{searchText.trim()}".
                   </Text>
                 ) : (
-                  results.map((a) => <AssetRow key={a.asset_id} a={a} />)
+                  searchResults.map((asset) => (
+                    <AssetRow key={asset.asset_id} asset={asset} />
+                  ))
                 )}
               </Section>
             ) : (
               <>
-                <Section title="Top 10 players">
-                  {players.map((a, i) => (
-                    <AssetRow key={a.asset_id} a={a} rank={i + 1} />
+                <Section title={`Top ${TOP_PLAYERS_COUNT} players`}>
+                  {players.map((asset, index) => (
+                    <AssetRow
+                      key={asset.asset_id}
+                      asset={asset}
+                      rank={index + 1}
+                    />
                   ))}
                 </Section>
 
-                <Section title="Top 5 teams">
-                  {teams.map((a, i) => (
-                    <AssetRow key={a.asset_id} a={a} rank={i + 1} />
+                <Section title={`Top ${TOP_TEAMS_COUNT} teams`}>
+                  {teams.map((asset, index) => (
+                    <AssetRow
+                      key={asset.asset_id}
+                      asset={asset}
+                      rank={index + 1}
+                    />
                   ))}
                 </Section>
 
@@ -228,8 +269,12 @@ export default function MarketScreen() {
                       sell.
                     </Text>
                   ) : (
-                    risers.map((a) => (
-                      <AssetRow key={a.asset_id} a={a} change={a.change_pct} />
+                    risers.map((asset) => (
+                      <AssetRow
+                        key={asset.asset_id}
+                        asset={asset}
+                        change={asset.change_pct}
+                      />
                     ))
                   )}
                 </Section>
@@ -238,8 +283,12 @@ export default function MarketScreen() {
                   {fallers.length === 0 ? (
                     <Text style={styles.empty}>No price drops yet.</Text>
                   ) : (
-                    fallers.map((a) => (
-                      <AssetRow key={a.asset_id} a={a} change={a.change_pct} />
+                    fallers.map((asset) => (
+                      <AssetRow
+                        key={asset.asset_id}
+                        asset={asset}
+                        change={asset.change_pct}
+                      />
                     ))
                   )}
                 </Section>

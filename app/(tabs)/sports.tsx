@@ -13,7 +13,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Team = {
+// ESPN data for a team in a game
+type Competitor = {
   homeAway: "home" | "away";
   winner?: boolean;
   score: string;
@@ -21,6 +22,7 @@ type Team = {
   records?: { type?: string; summary: string }[];
 };
 
+// ESPN's data for one game
 type Game = {
   id: string;
   date: string;
@@ -29,11 +31,74 @@ type Game = {
       description: string;
       detail: string;
       shortDetail: string;
-      state: string;
+      state: string; //pre, live, post
     };
   };
-  competitions: { competitors: Team[] }[];
+  competitions: { competitors: Competitor[] }[];
 };
+
+type LeagueInfo = { sport: string; league: string };
+
+// leagues
+const LEAGUES: Record<string, LeagueInfo> = {
+  nba: { sport: "basketball", league: "nba" },
+  nfl: { sport: "football", league: "nfl" },
+  mlb: { sport: "baseball", league: "mlb" },
+  wnba: { sport: "basketball", league: "wnba" },
+  nhl: { sport: "hockey", league: "nhl" },
+};
+
+const DAYS_AROUND_TODAY = 14;
+
+// live scores refresh
+const REFRESH_INTERVAL_MS = 30000;
+
+const TABS_SIDE_PADDING = 12;
+const DATE_TAB_WIDTH = 56;
+const DATE_TAB_MARGIN = 6;
+
+// turns a Date into the format ESPN wants
+function dateToApiString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+//formats dates into a readable format
+function formatDateLabel(dateStr: string) {
+  if (dateStr === dateToApiString(new Date())) return "Today";
+
+  const year = dateStr.slice(0, 4);
+  const month = dateStr.slice(4, 6);
+  const day = dateStr.slice(6, 8);
+  const date = new Date(`${year}-${month}-${day}T12:00:00`);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// list of dates for the date bar
+function getDatesAroundToday() {
+  const dates: string[] = [];
+  for (let offset = -DAYS_AROUND_TODAY; offset <= DAYS_AROUND_TODAY; offset++) {
+    const date = new Date();
+    date.setDate(date.getDate() + offset);
+    dates.push(dateToApiString(date));
+  }
+  return dates;
+}
+
+// ESPN scoreboard
+function getScoreboardUrl(leagueInfo: LeagueInfo, date?: string) {
+  const baseUrl = `https://site.api.espn.com/apis/site/v2/sports/${leagueInfo.sport}/${leagueInfo.league}/scoreboard`;
+  return date ? `${baseUrl}?dates=${date}` : baseUrl;
+}
+
+// get list of games for a league
+async function fetchGames(leagueInfo: LeagueInfo, date: string) {
+  const response = await fetch(getScoreboardUrl(leagueInfo, date));
+  const data = await response.json();
+  return (data.events || []) as Game[];
+}
 
 function formatGameTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString("en-US", {
@@ -42,27 +107,27 @@ function formatGameTime(dateStr: string) {
   });
 }
 
-function getRecord(t: Team) {
-  return (
-    (t.records?.find((r) => r.type === "total") ?? t.records?.[0])?.summary ??
-    ""
-  );
+// get's a team's record
+function getRecord(competitor: Competitor) {
+  const records = competitor.records ?? [];
+  const totalRecord = records.find((r) => r.type === "total") ?? records[0];
+  return totalRecord?.summary ?? "";
 }
 
 function TeamBadge({
-  t,
+  competitor,
   big,
   showRecord,
 }: {
-  t: Team;
+  competitor: Competitor;
   big: boolean;
   showRecord: boolean;
 }) {
   return (
     <View style={styles.teamCol}>
-      {t.team.logo ? (
+      {competitor.team.logo ? (
         <Image
-          source={{ uri: t.team.logo }}
+          source={{ uri: competitor.team.logo }}
           style={big ? styles.logoBig : styles.logo}
           resizeMode="contain"
         />
@@ -70,11 +135,11 @@ function TeamBadge({
         <View style={big ? styles.logoBig : styles.logo} />
       )}
       <Text style={styles.teamName} numberOfLines={1}>
-        {t.team.abbreviation}
+        {competitor.team.abbreviation}
       </Text>
       {showRecord && (
         <Text style={styles.teamRecord} numberOfLines={1}>
-          {getRecord(t)}
+          {getRecord(competitor)}
         </Text>
       )}
     </View>
@@ -82,12 +147,12 @@ function TeamBadge({
 }
 
 function SideValue({
-  t,
+  competitor,
   isPre,
   isPost,
   big,
 }: {
-  t: Team;
+  competitor: Competitor;
   isPre: boolean;
   isPost: boolean;
   big: boolean;
@@ -96,12 +161,13 @@ function SideValue({
     return (
       <View style={styles.valueCol}>
         <Text style={styles.record} numberOfLines={1} adjustsFontSizeToFit>
-          {getRecord(t)}
+          {getRecord(competitor)}
         </Text>
       </View>
     );
   }
-  const lost = isPost && t.winner === false;
+
+  const lost = isPost && competitor.winner === false;
   return (
     <View style={styles.valueCol}>
       <Text
@@ -109,7 +175,7 @@ function SideValue({
         numberOfLines={1}
         adjustsFontSizeToFit
       >
-        {t.score ?? "-"}
+        {competitor.score ?? "-"}
       </Text>
     </View>
   );
@@ -120,15 +186,17 @@ function GameCard({ game, league }: { game: Game; league: string }) {
   const big = width >= 800;
 
   const competitors = game.competitions[0].competitors;
-  const away = competitors.find((c) => c.homeAway === "away") ?? competitors[1];
-  const home = competitors.find((c) => c.homeAway === "home") ?? competitors[0];
+  const awayTeam =
+    competitors.find((c) => c.homeAway === "away") ?? competitors[1];
+  const homeTeam =
+    competitors.find((c) => c.homeAway === "home") ?? competitors[0];
 
-  const state = game.status.type.state; // "pre" | "in" | "post"
+  const state = game.status.type.state;
   const isPre = state === "pre";
   const isLive = state === "in";
   const isPost = state === "post";
 
-  // pre: start time, live: "5:32 - 2nd" / "Top 5th" / "Halftime", post: "Final"
+  // game time or if the game is finished, then "Final"
   const centerText = isPre
     ? formatGameTime(game.date)
     : game.status.type.shortDetail;
@@ -139,8 +207,13 @@ function GameCard({ game, league }: { game: Game; league: string }) {
       style={styles.card}
       onPress={() => router.push(`/game/${game.id}?league=${league}` as any)}
     >
-      <TeamBadge t={away} big={big} showRecord={!isPre} />
-      <SideValue t={away} isPre={isPre} isPost={isPost} big={big} />
+      <TeamBadge competitor={awayTeam} big={big} showRecord={!isPre} />
+      <SideValue
+        competitor={awayTeam}
+        isPre={isPre}
+        isPost={isPost}
+        big={big}
+      />
 
       <View style={styles.centerCol}>
         <Text
@@ -156,8 +229,13 @@ function GameCard({ game, league }: { game: Game; league: string }) {
         </Text>
       </View>
 
-      <SideValue t={home} isPre={isPre} isPost={isPost} big={big} />
-      <TeamBadge t={home} big={big} showRecord={!isPre} />
+      <SideValue
+        competitor={homeTeam}
+        isPre={isPre}
+        isPost={isPost}
+        big={big}
+      />
+      <TeamBadge competitor={homeTeam} big={big} showRecord={!isPre} />
     </TouchableOpacity>
   );
 }
@@ -165,166 +243,102 @@ function GameCard({ game, league }: { game: Game; league: string }) {
 export default function SportsScreen() {
   const [games, setGames] = useState<Game[]>([]);
   const [gamesLoading, setGamesLoading] = useState(false);
-  const [datesLoading, setDatesLoading] = useState(true);
   const [league, setLeague] = useState("nba");
   const [selectedDate, setSelectedDate] = useState("");
   const [availableDates, setAvailableDates] = useState<string[]>([]);
-
-  const sports = {
-    nba: { sport: "basketball", league: "nba" },
-    nfl: { sport: "football", league: "nfl" },
-    mlb: { sport: "baseball", league: "mlb" },
-    wnba: { sport: "basketball", league: "wnba" },
-    nhl: { sport: "hockey", league: "nhl" },
-  };
 
   const dateScrollRef = useRef<ScrollView>(null);
   const { width: screenWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
-  function formatDateParameters(date: Date) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, "0");
-    const d = String(date.getDate()).padStart(2, "0");
-    return `${y}${m}${d}`;
-  }
+  // builds date bar and selects today
+  async function loadDates(leagueInfo: LeagueInfo) {
+    // include dates around today so the bar isn't empty
+    const dates = getDatesAroundToday();
 
-  function formatDateLabel(dateStr: string) {
-    const todayStr = formatDateParameters(new Date());
-    if (dateStr === todayStr) return "Today";
-    const year = dateStr.slice(0, 4);
-    const month = dateStr.slice(4, 6);
-    const day = dateStr.slice(6, 8);
-    const date = new Date(`${year}-${month}-${day}T12:00:00`);
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  }
-
-  async function fetchAvailableDates(selected: {
-    sport: string;
-    league: string;
-  }) {
-    setDatesLoading(true);
     try {
-      const todayStr = formatDateParameters(new Date());
-
-      // fetch current scoreboard with no date filter
-      const res = await fetch(
-        `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard`,
-      );
-      const data = await res.json();
-
-      // get dates from today's events
-      const calendarDates: string[] = [];
-      if (data.events && data.events.length > 0) {
-        data.events.forEach((event: any) => {
-          if (event.date) {
-            calendarDates.push(formatDateParameters(new Date(event.date)));
-          }
-        });
+      // includes dates ESPN has
+      const response = await fetch(getScoreboardUrl(leagueInfo));
+      const data = await response.json();
+      for (const event of data.events ?? []) {
+        if (event.date) {
+          dates.push(dateToApiString(new Date(event.date)));
+        }
       }
-
-      // always generate ±14 days around today regardless
-      // this ensures the date bar always has dates to show
-      for (let i = -14; i <= 14; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        calendarDates.push(formatDateParameters(d));
-      }
-
-      const unique = [...new Set(calendarDates)].sort();
-
-      setAvailableDates(unique);
-      setSelectedDate(todayStr);
-    } catch (e) {
-      console.log("fetchAvailableDates error:", e);
-      const todayStr = formatDateParameters(new Date());
-      const dates = [];
-      for (let i = -14; i <= 14; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() + i);
-        dates.push(formatDateParameters(d));
-      }
-      setAvailableDates(dates);
-      setSelectedDate(todayStr);
+    } catch (error) {
+      console.log("loadDates error:", error);
     }
-    setDatesLoading(false);
+
+    // remove duplicates and sort by date
+    const uniqueDates = [...new Set(dates)].sort();
+    setAvailableDates(uniqueDates);
+    setSelectedDate(dateToApiString(new Date()));
   }
 
+  // reload when user changes league
   useEffect(() => {
-    const selected = sports[league as keyof typeof sports];
     setGames([]);
     setAvailableDates([]);
     setSelectedDate("");
-    fetchAvailableDates(selected);
+    loadDates(LEAGUES[league]);
   }, [league]);
 
   useEffect(() => {
     if (!selectedDate) return;
-    const selected = sports[league as keyof typeof sports];
+    const leagueInfo = LEAGUES[league];
 
-    async function fetchGames() {
+    async function loadGames() {
       setGamesLoading(true);
       try {
-        const res = await fetch(
-          `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${selectedDate}`,
-        );
-        const data = await res.json();
-        setGames(data.events || []);
-      } catch (e) {
-        console.log("fetchGames error:", e);
+        setGames(await fetchGames(leagueInfo, selectedDate));
+      } catch (error) {
+        console.log("loadGames error:", error);
         setGames([]);
       }
       setGamesLoading(false);
     }
 
-    fetchGames();
+    loadGames();
 
-    // only poll if the selected date is today
-    // no point refreshing past or future dates
-    const todayStr = formatDateParameters(new Date());
-    if (selectedDate !== todayStr) return;
+    //only refresh when looking at today
+    if (selectedDate !== dateToApiString(new Date())) return;
 
-    const interval = setInterval(async () => {
+    const refreshTimer = setInterval(async () => {
       try {
-        const res = await fetch(
-          `http://site.api.espn.com/apis/site/v2/sports/${selected.sport}/${selected.league}/scoreboard?dates=${selectedDate}`,
-        );
-        const data = await res.json();
-        const events = data.events || [];
+        const latestGames = await fetchGames(leagueInfo, selectedDate);
 
-        // only update state if there are live games on this sport/tab
-        const hasLiveGames = events.some(
-          (event: any) => event.status?.type?.state === "in",
+        // only update screen if a game is live
+        const anyLive = latestGames.some(
+          (game) => game.status?.type?.state === "in",
         );
-
-        if (hasLiveGames) {
-          setGames(events);
+        if (anyLive) {
+          setGames(latestGames);
         }
-      } catch (e) {
-        console.log("polling error:", e);
+      } catch (error) {
+        console.log("refresh error:", error);
       }
-    }, 30000);
+    }, REFRESH_INTERVAL_MS);
 
-    return () => clearInterval(interval);
+    return () => clearInterval(refreshTimer);
   }, [selectedDate, league]);
 
+  // have today be in the middle of the date bar
   useEffect(() => {
     if (availableDates.length === 0) return;
 
-    const todayStr = formatDateParameters(new Date());
-    const index = availableDates.indexOf(todayStr);
-    if (index === -1) return;
+    const todayIndex = availableDates.indexOf(dateToApiString(new Date()));
+    if (todayIndex === -1) return;
 
-    // each tab is 56 wide + 6 margin = 62, plus 12 of left padding
-    const tabCenter = 12 + index * 62 + 28;
-    const x = Math.max(0, tabCenter - screenWidth / 2);
+    const tabWidthWithMargin = DATE_TAB_WIDTH + DATE_TAB_MARGIN;
+    const todayCenter =
+      TABS_SIDE_PADDING + todayIndex * tabWidthWithMargin + DATE_TAB_WIDTH / 2;
+    const scrollX = Math.max(0, todayCenter - screenWidth / 2);
 
-    // small delay so the tabs have rendered before we scroll
-    const timer = setTimeout(() => {
-      dateScrollRef.current?.scrollTo({ x, animated: false });
+    const scrollTimer = setTimeout(() => {
+      dateScrollRef.current?.scrollTo({ x: scrollX, animated: false });
     }, 50);
 
-    return () => clearTimeout(timer);
+    return () => clearTimeout(scrollTimer);
   }, [availableDates, screenWidth]);
 
   return (
@@ -340,33 +354,37 @@ export default function SportsScreen() {
           </View>
         </TouchableOpacity>
       </View>
-      {/* League Tabs */}
+
+      {/* League tabs */}
       <View style={styles.tabsWrapper}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.tabsContent}
         >
-          {Object.keys(sports).map((key) => (
+          {Object.keys(LEAGUES).map((leagueName) => (
             <TouchableOpacity
-              key={key}
-              onPress={() => setLeague(key)}
-              style={[styles.leagueTab, league === key && styles.activeTab]}
+              key={leagueName}
+              onPress={() => setLeague(leagueName)}
+              style={[
+                styles.leagueTab,
+                league === leagueName && styles.activeTab,
+              ]}
             >
               <Text
                 style={[
                   styles.leagueTabText,
-                  league === key && styles.activeTabText,
+                  league === leagueName && styles.activeTabText,
                 ]}
               >
-                {key.toUpperCase()}
+                {leagueName.toUpperCase()}
               </Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
 
-      {/* Scrollable Date bar */}
+      {/* Scrollable date bar */}
       <View style={styles.dateWrapper}>
         <ScrollView
           ref={dateScrollRef}
@@ -396,9 +414,9 @@ export default function SportsScreen() {
         </ScrollView>
       </View>
 
-      {/* Games List */}
+      {/* Games list */}
       {gamesLoading ? (
-        <View style={styles.container}>
+        <View style={styles.center}>
           <ActivityIndicator size="large" color="#16fd16" />
         </View>
       ) : games.length === 0 ? (
@@ -408,7 +426,7 @@ export default function SportsScreen() {
       ) : (
         <FlatList
           data={games}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(game) => game.id}
           renderItem={({ item }) => <GameCard game={item} league={league} />}
           contentContainerStyle={{ paddingVertical: 8, paddingBottom: 32 }}
         />
@@ -418,77 +436,9 @@ export default function SportsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: "center", justifyContent: "center" },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
 
-  logoBig: { width: 72, height: 72 },
-  scoreBig: { fontSize: 40 },
-  centerTextBig: { fontSize: 18 },
-  teamRecord: { color: "#6b6b70", fontSize: 11, marginTop: 1 },
-
-  card: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1c1c1e",
-    borderRadius: 14,
-    marginHorizontal: 12,
-    marginVertical: 5,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-  },
-  teamCol: { width: 64, alignItems: "center" },
-  logo: { width: 48, height: 48 },
-  teamName: { color: "#9a9a9f", fontSize: 12, fontWeight: "600", marginTop: 4 },
-
-  valueCol: { flex: 1, alignItems: "center", justifyContent: "center" },
-  score: { color: "white", fontSize: 30, fontWeight: "700" },
-  scoreLost: { color: "#6b6b70" },
-  record: { color: "#9a9a9f", fontSize: 14 },
-
-  centerCol: { flex: 1.3, alignItems: "center", justifyContent: "center" },
-  centerText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  centerTextLive: { color: "#ff4d4d" },
-
-  //league tabs
-  tabsWrapper: { height: 64, justifyContent: "center" },
-  tabsContent: { alignItems: "center", paddingHorizontal: 12 },
-  leagueTab: {
-    width: 64,
-    height: 36,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 8,
-    borderRadius: 18,
-    backgroundColor: "#333",
-  },
-  leagueTabText: { fontSize: 13, fontWeight: "600", color: "#aaaaaa" },
-
-  //date tabs
-  dateWrapper: { height: 44, justifyContent: "center" },
-  dateTab: {
-    width: 56,
-    height: 28,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 6,
-    borderRadius: 14,
-    backgroundColor: "#222",
-  },
-  activeDateTab: { backgroundColor: "#16fd16" },
-  dateTabText: { fontSize: 11, fontWeight: "600", color: "#888" },
-  activeDateTabText: { color: "#000" },
-
-  activeTab: { backgroundColor: "#16fd16" },
-  activeTabText: { color: "#ffffff" },
-
-  statusLive: { color: "#ff4d4d", fontWeight: "600" },
-  statusPre: { color: "#888" },
-
+  // Header
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -506,4 +456,68 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   avatarText: { color: "#000", fontWeight: "700", fontSize: 16 },
+
+  // League tabs
+  tabsWrapper: { height: 64, justifyContent: "center" },
+  tabsContent: { alignItems: "center", paddingHorizontal: TABS_SIDE_PADDING },
+  leagueTab: {
+    width: 64,
+    height: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+    borderRadius: 18,
+    backgroundColor: "#333",
+  },
+  leagueTabText: { fontSize: 13, fontWeight: "600", color: "#aaaaaa" },
+  activeTab: { backgroundColor: "#16fd16" },
+  activeTabText: { color: "#ffffff" },
+
+  // Date tabs
+  dateWrapper: { height: 44, justifyContent: "center" },
+  dateTab: {
+    width: DATE_TAB_WIDTH,
+    height: 28,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: DATE_TAB_MARGIN,
+    borderRadius: 14,
+    backgroundColor: "#222",
+  },
+  activeDateTab: { backgroundColor: "#16fd16" },
+  dateTabText: { fontSize: 11, fontWeight: "600", color: "#888" },
+  activeDateTabText: { color: "#000" },
+
+  // Game card
+  card: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#1c1c1e",
+    borderRadius: 14,
+    marginHorizontal: 12,
+    marginVertical: 5,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+  },
+  teamCol: { width: 64, alignItems: "center" },
+  logo: { width: 48, height: 48 },
+  logoBig: { width: 72, height: 72 },
+  teamName: { color: "#9a9a9f", fontSize: 12, fontWeight: "600", marginTop: 4 },
+  teamRecord: { color: "#6b6b70", fontSize: 11, marginTop: 1 },
+
+  valueCol: { flex: 1, alignItems: "center", justifyContent: "center" },
+  score: { color: "white", fontSize: 30, fontWeight: "700" },
+  scoreBig: { fontSize: 40 },
+  scoreLost: { color: "#6b6b70" },
+  record: { color: "#9a9a9f", fontSize: 14 },
+
+  centerCol: { flex: 1.3, alignItems: "center", justifyContent: "center" },
+  centerText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  centerTextBig: { fontSize: 18 },
+  centerTextLive: { color: "#ff4d4d" },
 });
