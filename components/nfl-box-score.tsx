@@ -1,21 +1,15 @@
 import { router } from "expo-router";
 import { useState } from "react";
 import {
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    useWindowDimensions,
-    View,
+  Image,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from "react-native";
 
-/*
- * NFL box score, laid out like CBS Sports:
- *   - "Players" view: one table per stat group (passing, rushing, ...)
- *   - "Team" view: both teams' totals side by side
- */
-
-// The player tables to show, in order. groupName is the name ESPN uses for
-// that group of stats. To add another table (like Kicking), add a line here.
+// stat sections to display for NFL data. Inspired by CBS Sports
 const SECTIONS = [
   { title: "Passing", groupName: "passing" },
   { title: "Rushing", groupName: "rushing" },
@@ -26,18 +20,25 @@ const SECTIONS = [
   { title: "Punt Returns", groupName: "puntReturns" },
 ];
 
-// Sizes for the player tables
-const NAME_WIDTH = 100;
+// sizes for player tables
+const NAME_WIDTH = 112;
 const SIDE_PADDING = 12;
-const MIN_COL_WIDTH = 32;
+const MIN_COL_WIDTH = 30;
 const MAX_COL_WIDTH = 56;
+
+function getHeadshotUrl(athlete: any, leagueName: string) {
+  if (typeof athlete?.headshot === "string") {
+    return athlete.headshot;
+  }
+  if (athlete?.headshot?.href) {
+    return athlete.headshot.href;
+  }
+  return `https://a.espncdn.com/i/headshots/${leagueName}/players/full/${athlete.id}.png`;
+}
 
 type BoxView = "players" | "team";
 
-/* ------------------------------------------------------------------ */
-/* One player table (like "Passing")                                   */
-/* ------------------------------------------------------------------ */
-
+//stat section function
 function StatTable({
   title,
   group,
@@ -49,10 +50,9 @@ function StatTable({
 }) {
   const { width: screenWidth } = useWindowDimensions();
 
-  // ESPN tells us the column names for this group (like "C/ATT", "YDS", "TD")
+  // ESPN tells us stat section (column) names
   const labels: string[] = group.labels ?? group.names ?? [];
 
-  // Share the space left after the name column between the stat columns
   const spaceForStats = screenWidth - SIDE_PADDING * 2 - NAME_WIDTH;
   const sharedWidth = Math.floor(spaceForStats / Math.max(labels.length, 1));
   const colWidth = Math.min(
@@ -78,17 +78,17 @@ function StatTable({
         ))}
       </View>
 
-      {/* One row per player */}
+      {/* one row per player */}
       {(group.athletes ?? []).map((playerData: any) => {
         const athlete = playerData.athlete;
         const values: string[] = playerData.stats ?? [];
-        const headshotUrl = `https://a.espncdn.com/i/headshots/${leagueName}/players/full/${athlete.id}.png`;
+        const headshotUrl = getHeadshotUrl(athlete, leagueName);
 
         return (
           <View key={athlete.id} style={styles.tableRow}>
-            {/* Tapping the name opens the player's profile */}
+            {/* pressing the name opens the player's profile */}
             <TouchableOpacity
-              style={styles.nameCell}
+              style={styles.nameButton}
               onPress={() =>
                 router.push({
                   pathname: "/profile/[id]",
@@ -100,6 +100,7 @@ function StatTable({
                 } as any)
               }
             >
+              <Image source={{ uri: headshotUrl }} style={styles.headshot} />
               <Text style={[styles.white, styles.nameText]} numberOfLines={1}>
                 {athlete.shortName ?? athlete.displayName}
               </Text>
@@ -120,13 +121,8 @@ function StatTable({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Team comparison                                                     */
-/* ------------------------------------------------------------------ */
-
-// Both teams' stats side by side: away value | stat name | home value
+// team stats tab to compare how the teams performed in the game
 function TeamComparison({ statTeams }: { statTeams: any[] }) {
-  // Pick out the away and home teams (falls back to the order ESPN gives)
   const awayTeam = statTeams.find((t) => t.homeAway === "away") ?? statTeams[0];
   const homeTeam = statTeams.find((t) => t.homeAway === "home") ?? statTeams[1];
 
@@ -153,10 +149,10 @@ function TeamComparison({ statTeams }: { statTeams: any[] }) {
       </View>
 
       {awayStats.map((awayStat) => {
-        // Find the same stat for the home team
+        // find stat for the home team
         const homeStat = homeStats.find((s) => s.name === awayStat.name);
 
-        // Skip stats that don't have a name we can show
+        // skip stats that don't have valid names we can show
         if (!awayStat.label) return null;
 
         return (
@@ -175,10 +171,7 @@ function TeamComparison({ statTeams }: { statTeams: any[] }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Main box score                                                      */
-/* ------------------------------------------------------------------ */
-
+//Main box score
 export default function NflBoxScore({
   playerTeams,
   statTeams,
@@ -186,8 +179,8 @@ export default function NflBoxScore({
   selectedTeam,
   onSelectTeam,
 }: {
-  playerTeams: any[]; // gameData.boxscore.players (player stats for each team)
-  statTeams: any[]; // gameData.boxscore.teams (team totals for each team)
+  playerTeams: any[];
+  statTeams: any[];
   leagueName: string;
   selectedTeam: number;
   onSelectTeam: (index: number) => void;
@@ -200,12 +193,12 @@ export default function NflBoxScore({
     );
   }
 
-  // The stat groups for the selected team (passing, rushing, ...)
+  // The stat sections for the selected team
   const groups: any[] = playerTeams[selectedTeam]?.statistics ?? [];
 
   return (
     <View>
-      {/* Switch between Players and Team */}
+      {/* tabs to switch between player and team stats */}
       <View style={styles.switchRow}>
         {(["players", "team"] as const).map((option) => (
           <TouchableOpacity
@@ -229,7 +222,7 @@ export default function NflBoxScore({
         <TeamComparison statTeams={statTeams} />
       ) : (
         <View>
-          {/* Buttons to switch between the two teams */}
+          {/* tabs to switch between teams */}
           <View style={styles.switchRow}>
             {playerTeams.map((team, index) => (
               <TouchableOpacity
@@ -252,7 +245,6 @@ export default function NflBoxScore({
             ))}
           </View>
 
-          {/* One table for each section that has players in it */}
           {SECTIONS.map((section) => {
             const group = groups.find((g) => g.name === section.groupName);
             if (!group || !group.athletes || group.athletes.length === 0) {
@@ -278,7 +270,6 @@ const styles = StyleSheet.create({
   gray: { color: "#666" },
   bold: { fontWeight: "700" },
 
-  // Players / Team switch and team buttons
   switchRow: {
     flexDirection: "row",
     paddingHorizontal: 12,
@@ -312,7 +303,19 @@ const styles = StyleSheet.create({
     borderBottomColor: "#222",
   },
   nameCell: { width: NAME_WIDTH, fontSize: 12 },
-  nameText: { fontSize: 12 },
+  nameButton: {
+    width: NAME_WIDTH,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  nameText: { flex: 1, fontSize: 12 },
+  headshot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: 6,
+    backgroundColor: "#333",
+  },
   statCell: { textAlign: "center", fontSize: 11 },
 
   // Team comparison

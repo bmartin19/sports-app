@@ -21,218 +21,364 @@ import {
 } from "../../lib/market";
 import { supabase } from "../../services/supabase";
 
-// Must match c_liquidity in execute_trade() in Supabase.
+// liquidity constant that must match in Supabase
 const LIQUIDITY = 500;
 
-// Name of the timestamp column on the transactions table.
-// Change this if yours is called something else.
-const TX_DATE_COLUMN = "created_at";
-
-// How many rows to load, and how many to show before "Show all".
-const TX_LOAD_LIMIT = 500;
+// number of rows to load from database
+const TRADE_LOAD_LIMIT = 500;
 const DIVIDEND_LOAD_LIMIT = 200;
+
+// how many rows to show before "Show All" in transactions
 const HISTORY_PREVIEW_COUNT = 10;
 
-// What you would actually receive if you sold `q` shares at spot price `p`.
-// (Selling in several smaller orders gives the same total, so this is the
-// true cash-out value of a position.)
-const exitValue = (p: number, q: number) =>
-  p * LIQUIDITY * (1 - Math.exp(-q / LIQUIDITY));
-
-const signedMoney = (n: number) => `${n >= 0 ? "+" : "-"}${money(Math.abs(n))}`;
-
-// "Oct 28" (adds the year if it's not this year), optionally with the time
-function formatDate(iso: string, withTime = false) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const sameYear = d.getFullYear() === new Date().getFullYear();
-  const date = d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    ...(sameYear ? {} : { year: "numeric" }),
-  });
-  if (!withTime) return date;
-  const time = d.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  return `${date}, ${time}`;
-}
-
-const sharesLabel = (n: number) => `${n} share${n === 1 ? "" : "s"}`;
-
+// holding on player or team the user has
 type Holding = {
   quantity: number;
-  avg_cost: number;
+  avgCost: number; // average price paid per share
   asset: MarketAsset;
-  value: number; // what the position would pay out if sold
+  value: number; // what the shares would pay out if sold right now
   profit: number; // value minus what the user paid
   lastBought: string | null; // date of the most recent buy
 };
 
-// One line in the history list: a buy, a sell, or a dividend payout
+type ActivityKind = "buy" | "sell" | "dividend";
+
+// activity in transaction history
 type Activity = {
   key: string;
-  kind: "buy" | "sell" | "dividend";
-  detail: string; // e.g. "5 shares @ 12.40", "5 shares · 31.5 fantasy pts" or "5 shares · won by 12"
+  kind: ActivityKind;
+  detail: string;
   total: number;
   date: string;
   asset: MarketAsset | null;
-  asset_id: string;
+  assetId: string;
 };
 
-const BADGE_TEXT = { buy: "BUY", sell: "SELL", dividend: "MATCH" } as const;
+// text for the badge in transaction section
+const BADGE_LABELS: Record<ActivityKind, string> = {
+  buy: "BUY",
+  sell: "SELL",
+  dividend: "MATCH",
+};
+
+// what user actually receives when they sell
+function sellValue(price: number, shares: number) {
+  return price * LIQUIDITY * (1 - Math.exp(-shares / LIQUIDITY));
+}
+
+// + or - sign to the amount
+function signedMoney(amount: number) {
+  const sign = amount >= 0 ? "+" : "-";
+  return `${sign}${money(Math.abs(amount))}`;
+}
+
+function formatShares(count: number) {
+  return `${count} ${count === 1 ? "share" : "shares"}`;
+}
+
+function formatDate(isoString: string, withTime = false) {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const dateOptions: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+  };
+  if (date.getFullYear() !== new Date().getFullYear()) {
+    dateOptions.year = "numeric";
+  }
+  const dateText = date.toLocaleDateString("en-US", dateOptions);
+
+  if (!withTime) return dateText;
+
+  const timeText = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateText}, ${timeText}`;
+}
+
+//finds date of the last buy
+function findLastBuyDates(tradeRows: any[]) {
+  const lastBuyDates: Record<string, string> = {};
+  for (const trade of tradeRows) {
+    const key = String(trade.asset_id);
+    if (trade.side === "buy" && !(key in lastBuyDates)) {
+      lastBuyDates[key] = trade.created_at;
+    }
+  }
+  return lastBuyDates;
+}
+
+function buildHoldings(
+  holdingRows: any[],
+  assetsById: Record<string, MarketAsset>,
+  lastBuyDates: Record<string, string>,
+) {
+  const holdings: Holding[] = [];
+
+  for (const row of holdingRows) {
+    const key = String(row.asset_id);
+    const asset = assetsById[key];
+    if (!asset) continue; // skip if we couldn't find the player/team
+
+    const quantity = Number(row.quantity);
+    const avgCost = Number(row.avg_cost);
+    const value = sellValue(asset.current_price, quantity);
+
+    holdings.push({
+      quantity,
+      avgCost,
+      asset,
+      value,
+      profit: value - avgCost * quantity,
+      lastBought: lastBuyDates[key] ?? null,
+    });
+  }
+
+  // most valuable holdings first
+  holdings.sort((a, b) => b.value - a.value);
+  return holdings;
+}
+
+// combines holdings and match payouts into one list
+function buildHistory(
+  tradeRows: any[],
+  dividendRows: any[],
+  assetsById: Record<string, MarketAsset>,
+) {
+  const history: Activity[] = [];
+
+  for (const trade of tradeRows) {
+    history.push({
+      key: `trade-${trade.id}`,
+      kind: trade.side, // "buy" or "sell"
+      detail: `${formatShares(Number(trade.quantity))} @ ${money(Number(trade.unit_price))}`,
+      total: Number(trade.total),
+      date: trade.created_at,
+      asset: assetsById[String(trade.asset_id)] ?? null,
+      assetId: String(trade.asset_id),
+    });
+  }
+
+  for (const dividend of dividendRows) {
+    // payouts for match earnings
+    //teams are based from margin of victory
+    //players from fantasy points
+    let detail = `${formatShares(Number(dividend.shares))} · ${Number(dividend.fantasy_points)} fantasy pts`;
+    if (dividend.margin != null) {
+      detail = `${formatShares(Number(dividend.shares))} · won by ${Number(dividend.margin)}`;
+    }
+
+    history.push({
+      key: `dividend-${dividend.id}`,
+      kind: "dividend",
+      detail,
+      total: Number(dividend.amount),
+      date: dividend.created_at,
+      asset: assetsById[String(dividend.asset_id)] ?? null,
+      assetId: String(dividend.asset_id),
+    });
+  }
+
+  history.sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+  );
+  return history;
+}
+// a player or team the user holds
+function HoldingItem({ holding }: { holding: Holding }) {
+  const amountPaid = holding.avgCost * holding.quantity;
+  const profitPercent =
+    amountPaid > 0 ? (holding.profit / amountPaid) * 100 : 0;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={styles.row}
+      onPress={() => router.push(`/asset/${holding.asset.asset_id}` as any)}
+    >
+      <Avatar uri={holding.asset.image_url} />
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text style={styles.name} numberOfLines={1}>
+          {holding.asset.name}
+        </Text>
+        <Text style={styles.sub} numberOfLines={1}>
+          {formatShares(holding.quantity)} · avg {money(holding.avgCost)}
+        </Text>
+        {holding.lastBought ? (
+          <Text style={styles.sub} numberOfLines={1}>
+            Last bought {formatDate(holding.lastBought)}
+          </Text>
+        ) : null}
+      </View>
+      <View style={{ alignItems: "flex-end" }}>
+        <Text style={styles.price}>{money(holding.value)}</Text>
+        <Text
+          style={[styles.change, holding.profit >= 0 ? styles.up : styles.down]}
+        >
+          {pct(profitPercent)}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+// item in the transaction history
+function HistoryItem({ item }: { item: Activity }) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={styles.row}
+      disabled={!item.asset}
+      onPress={() => router.push(`/asset/${item.assetId}` as any)}
+    >
+      <View
+        style={[
+          styles.badge,
+          item.kind === "buy" && styles.buyBadge,
+          item.kind === "sell" && styles.sellBadge,
+          item.kind === "dividend" && styles.dividendBadge,
+        ]}
+      >
+        <Text
+          style={[
+            styles.badgeText,
+            item.kind === "dividend" && styles.badgeTextLight,
+          ]}
+        >
+          {BADGE_LABELS[item.kind]}
+        </Text>
+      </View>
+      <View style={{ flex: 1, marginLeft: 12 }}>
+        <Text style={styles.name} numberOfLines={1}>
+          {item.asset?.name ?? "Unknown asset"}
+        </Text>
+        <Text style={styles.sub} numberOfLines={1}>
+          {item.detail}
+        </Text>
+        <Text style={styles.sub} numberOfLines={1}>
+          {formatDate(item.date, true)}
+        </Text>
+      </View>
+      <Text style={styles.price}>
+        {item.kind === "buy" ? "-" : "+"}
+        {money(item.total)}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+//Screen layout
 
 export default function PortfolioScreen() {
   const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
-  const [cash, setCash] = useState(0);
-  const [dividends, setDividends] = useState(0);
+  const [cash, setCash] = useState(0); // shown as "Belief Points"
+  const [dividends, setDividends] = useState(0); // total match earnings
   const [holdings, setHoldings] = useState<Holding[]>([]);
   const [history, setHistory] = useState<Activity[]>([]);
   const [showAllHistory, setShowAllHistory] = useState(false);
 
+  // loads portfolio from Supabase
   const load = useCallback(async () => {
     const {
       data: { session },
     } = await supabase.auth.getSession();
+
+    // if not logged in
     if (!session) {
       setSignedIn(false);
       setLoading(false);
       return;
     }
     setSignedIn(true);
+    const userId = session.user.id;
 
-    const [prof, rows, txRows, divRows] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select("cash_balance, dividends_earned")
-        .eq("id", session.user.id)
-        .maybeSingle(),
-      supabase
-        .from("holdings")
-        .select("asset_id, quantity, avg_cost")
-        .eq("user_id", session.user.id),
-      supabase
-        .from("transactions")
-        .select(
-          `id, asset_id, side, quantity, unit_price, total, ${TX_DATE_COLUMN}`,
-        )
-        .eq("user_id", session.user.id)
-        .order(TX_DATE_COLUMN, { ascending: false })
-        .limit(TX_LOAD_LIMIT),
-      supabase
-        .from("dividend_payments")
-        .select(
-          "id, asset_id, shares, fantasy_points, margin, amount, created_at",
-        )
-        .eq("user_id", session.user.id)
-        .order("created_at", { ascending: false })
-        .limit(DIVIDEND_LOAD_LIMIT),
-    ]);
-    setCash(Number(prof.data?.cash_balance ?? 0));
-    setDividends(Number(prof.data?.dividends_earned ?? 0));
+    // send requests together so it loads faster
+    const [profileResult, holdingsResult, tradesResult, dividendsResult] =
+      await Promise.all([
+        supabase
+          .from("profiles")
+          .select("cash_balance, dividends_earned")
+          .eq("id", userId)
+          .maybeSingle(),
+        supabase
+          .from("holdings")
+          .select("asset_id, quantity, avg_cost")
+          .eq("user_id", userId),
+        supabase
+          .from("transactions")
+          .select("id, asset_id, side, quantity, unit_price, total, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(TRADE_LOAD_LIMIT),
+        supabase
+          .from("dividend_payments")
+          .select(
+            "id, asset_id, shares, fantasy_points, margin, amount, created_at",
+          )
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(DIVIDEND_LOAD_LIMIT),
+      ]);
 
-    const held = rows.data ?? [];
-    const txData = (txRows.data ?? []) as any[];
-    const divData = (divRows.data ?? []) as any[];
+    setCash(Number(profileResult.data?.cash_balance ?? 0));
+    setDividends(Number(profileResult.data?.dividends_earned ?? 0));
 
-    // Load every asset we need to show a name for (held, traded, or paid a dividend)
+    const holdingRows = (holdingsResult.data ?? []) as any[];
+    const tradeRows = (tradesResult.data ?? []) as any[];
+    const dividendRows = (dividendsResult.data ?? []) as any[];
+
+    // collect ids of players and teams we need
     const assetIds = [
       ...new Set([
-        ...held.map((h) => h.asset_id),
-        ...txData.map((t) => t.asset_id),
-        ...divData.map((d) => d.asset_id),
+        ...holdingRows.map((row) => row.asset_id),
+        ...tradeRows.map((row) => row.asset_id),
+        ...dividendRows.map((row) => row.asset_id),
       ]),
     ];
-    let assets: MarketAsset[] = [];
-    if (assetIds.length) {
+
+    // load assets and store by id to make it easier to find
+    const assetsById: Record<string, MarketAsset> = {};
+    if (assetIds.length > 0) {
       const { data } = await supabase
         .from("market_assets")
         .select("*")
         .in("asset_id", assetIds);
-      assets = (data ?? []).map(toAsset);
-    }
-    const assetById = new Map(assets.map((a) => [String(a.asset_id), a]));
 
-    // Transactions are newest first, so the first buy we see per asset
-    // is the most recent one.
-    const lastBuy = new Map<string, string>();
-    for (const t of txData) {
-      const key = String(t.asset_id);
-      if (t.side === "buy" && !lastBuy.has(key)) {
-        lastBuy.set(key, t[TX_DATE_COLUMN]);
+      for (const asset of (data ?? []).map(toAsset)) {
+        assetsById[String(asset.asset_id)] = asset;
       }
     }
 
-    const list: Holding[] = [];
-    for (const h of held) {
-      const asset = assetById.get(String(h.asset_id));
-      if (!asset) continue;
-      const quantity = Number(h.quantity);
-      const avg_cost = Number(h.avg_cost);
-      const value = exitValue(asset.current_price, quantity);
-      list.push({
-        quantity,
-        avg_cost,
-        asset,
-        value,
-        profit: value - avg_cost * quantity,
-        lastBought: lastBuy.get(String(h.asset_id)) ?? null,
-      });
-    }
-    list.sort((a, b) => b.value - a.value);
-    setHoldings(list);
-
-    // Merge trades and dividends into one list, newest first
-    const activity: Activity[] = [
-      ...txData.map((t) => ({
-        key: `tx-${t.id}`,
-        kind: t.side as "buy" | "sell",
-        detail: `${sharesLabel(Number(t.quantity))} @ ${money(Number(t.unit_price))}`,
-        total: Number(t.total),
-        date: t[TX_DATE_COLUMN] as string,
-        asset: assetById.get(String(t.asset_id)) ?? null,
-        asset_id: String(t.asset_id),
-      })),
-      ...divData.map((d) => ({
-        key: `div-${d.id}`,
-        kind: "dividend" as const,
-        // Team payouts have a margin of victory, player payouts have fantasy points
-        detail:
-          d.margin != null
-            ? `${sharesLabel(Number(d.shares))} · won by ${Number(d.margin)}`
-            : `${sharesLabel(Number(d.shares))} · ${Number(d.fantasy_points)} fantasy pts`,
-        total: Number(d.amount),
-        date: d.created_at as string,
-        asset: assetById.get(String(d.asset_id)) ?? null,
-        asset_id: String(d.asset_id),
-      })),
-    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    setHistory(activity);
+    const lastBuyDates = findLastBuyDates(tradeRows);
+    setHoldings(buildHoldings(holdingRows, assetsById, lastBuyDates));
+    setHistory(buildHistory(tradeRows, dividendRows, assetsById));
     setLoading(false);
   }, []);
 
-  // Reload every time this tab is opened (e.g. after making a trade)
   useFocusEffect(
     useCallback(() => {
       load();
     }, [load]),
   );
 
+  // Pull-to-refresh
   async function onRefresh() {
     setRefreshing(true);
     await load();
     setRefreshing(false);
   }
 
-  // Dividends are already inside `cash`, so net worth doesn't add them again
-  const invested = holdings.reduce((sum, h) => sum + h.value, 0);
+  const invested = holdings.reduce((sum, holding) => sum + holding.value, 0);
   const netWorth = cash + invested;
-  // Gain on shares still held, plus every dividend paid so far
-  const holdingsProfit = holdings.reduce((sum, h) => sum + h.profit, 0);
+  const holdingsProfit = holdings.reduce(
+    (sum, holding) => sum + holding.profit,
+    0,
+  );
   const totalProfit = holdingsProfit + dividends;
 
   const visibleHistory = showAllHistory
@@ -272,6 +418,7 @@ export default function PortfolioScreen() {
           }
         >
           <View style={styles.column}>
+            {/* Summary card */}
             <View style={styles.summary}>
               <Text style={styles.label}>Net worth</Text>
               <Text style={styles.netWorth}>{money(netWorth)}</Text>
@@ -306,6 +453,7 @@ export default function PortfolioScreen() {
               </View>
             </View>
 
+            {/* Holdings */}
             <Text style={styles.sectionTitle}>Your holdings</Text>
             {holdings.length === 0 ? (
               <View style={{ alignItems: "center", marginTop: 12 }}>
@@ -319,98 +467,23 @@ export default function PortfolioScreen() {
                 </TouchableOpacity>
               </View>
             ) : (
-              holdings.map((h) => {
-                const cost = h.avg_cost * h.quantity;
-                const profitPct = cost > 0 ? (h.profit / cost) * 100 : 0;
-                return (
-                  <TouchableOpacity
-                    key={h.asset.asset_id}
-                    activeOpacity={0.7}
-                    style={styles.row}
-                    onPress={() =>
-                      router.push(`/asset/${h.asset.asset_id}` as any)
-                    }
-                  >
-                    <Avatar uri={h.asset.image_url} />
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.name} numberOfLines={1}>
-                        {h.asset.name}
-                      </Text>
-                      <Text style={styles.sub} numberOfLines={1}>
-                        {sharesLabel(h.quantity)} · avg {money(h.avg_cost)}
-                      </Text>
-                      {h.lastBought ? (
-                        <Text style={styles.sub} numberOfLines={1}>
-                          Last bought {formatDate(h.lastBought)}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <View style={{ alignItems: "flex-end" }}>
-                      <Text style={styles.price}>{money(h.value)}</Text>
-                      <Text
-                        style={[
-                          styles.change,
-                          h.profit >= 0 ? styles.up : styles.down,
-                        ]}
-                      >
-                        {pct(profitPct)}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })
+              holdings.map((holding) => (
+                <HoldingItem key={holding.asset.asset_id} holding={holding} />
+              ))
             )}
 
+            {/* Transaction History */}
             <Text style={styles.sectionTitle}>History</Text>
             {history.length === 0 ? (
               <Text style={styles.emptyLeft}>No activity yet.</Text>
             ) : (
               <>
-                {visibleHistory.map((a) => (
-                  <TouchableOpacity
-                    key={a.key}
-                    activeOpacity={0.7}
-                    style={styles.row}
-                    disabled={!a.asset}
-                    onPress={() => router.push(`/asset/${a.asset_id}` as any)}
-                  >
-                    <View
-                      style={[
-                        styles.badge,
-                        a.kind === "buy" && styles.buyBadge,
-                        a.kind === "sell" && styles.sellBadge,
-                        a.kind === "dividend" && styles.dividendBadge,
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.badgeText,
-                          a.kind === "dividend" && styles.badgeTextLight,
-                        ]}
-                      >
-                        {BADGE_TEXT[a.kind]}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={styles.name} numberOfLines={1}>
-                        {a.asset?.name ?? "Unknown asset"}
-                      </Text>
-                      <Text style={styles.sub} numberOfLines={1}>
-                        {a.detail}
-                      </Text>
-                      <Text style={styles.sub} numberOfLines={1}>
-                        {formatDate(a.date, true)}
-                      </Text>
-                    </View>
-                    <Text style={styles.price}>
-                      {a.kind === "buy" ? "-" : "+"}
-                      {money(a.total)}
-                    </Text>
-                  </TouchableOpacity>
+                {visibleHistory.map((item) => (
+                  <HistoryItem key={item.key} item={item} />
                 ))}
                 {history.length > HISTORY_PREVIEW_COUNT && (
                   <TouchableOpacity
-                    onPress={() => setShowAllHistory((v) => !v)}
+                    onPress={() => setShowAllHistory(!showAllHistory)}
                     activeOpacity={0.7}
                     style={styles.showMore}
                   >
@@ -435,6 +508,8 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 16, paddingBottom: 8 },
   title: { color: "white", fontSize: 24, fontWeight: "800" },
   column: { width: "100%", maxWidth: 720, paddingHorizontal: 12 },
+
+  // Summary card
   summary: {
     backgroundColor: colors.card,
     borderRadius: 16,
@@ -462,6 +537,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginLeft: 4,
   },
+
+  // Rows
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -477,6 +554,8 @@ const styles = StyleSheet.create({
   change: { fontSize: 12, fontWeight: "600", marginTop: 2 },
   up: { color: colors.green },
   down: { color: colors.red },
+
+  // Empty states and buttons
   empty: { color: colors.muted, fontSize: 14, marginBottom: 12 },
   emptyLeft: {
     color: colors.muted,
@@ -493,6 +572,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonText: { color: "#000", fontWeight: "800", fontSize: 15 },
+
+  // History badges
   badge: {
     width: 58,
     height: 28,

@@ -13,20 +13,16 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-/* ------------------------------------------------------------------ */
-/* League config                                                      */
-/* ------------------------------------------------------------------ */
+// League Stats
 
-// Leagues this screen can show, and the names ESPN uses for them
+// leagues
 const LEAGUES: Record<string, { sport: string; league: string }> = {
   nba: { sport: "basketball", league: "nba" },
   wnba: { sport: "basketball", league: "wnba" },
   nfl: { sport: "football", league: "nfl" },
 };
 
-/* ------------------------------------------------------------------ */
-/* Tabs                                                                */
-/* ------------------------------------------------------------------ */
+//different tabs
 
 type TabName = "feed" | "quarters" | "boxscore";
 
@@ -38,14 +34,7 @@ const TAB_LABELS: Record<TabName, string> = {
   boxscore: "Box Score",
 };
 
-/* ------------------------------------------------------------------ */
-/* Box score layout                                                    */
-/* ------------------------------------------------------------------ */
-
-/*
- * "core" columns are the 7 that must fit on screen when the box score
- * loads. The rest sit off to the right and are reached by scrolling.
- */
+//box score layout and stat columns that will display
 const STAT_COLUMNS = [
   { key: "min", label: "MIN", core: true },
   { key: "pts", label: "PTS", core: true },
@@ -67,27 +56,19 @@ const CORE_COUNT = STAT_COLUMNS.filter((col) => col.core).length;
 const EXTRA_COUNT = STAT_COLUMNS.length - CORE_COUNT;
 
 const NAME_COL_WIDTH = 112;
-const ROW_PADDING = 16; // 8 left + 8 right
+const ROW_PADDING = 16;
 const MIN_CORE_COL_WIDTH = 30;
 const MAX_CORE_COL_WIDTH = 48;
-const EXTRA_COL_WIDTH = 46; // wide enough for "10-15" and "42.6"
+const EXTRA_COL_WIDTH = 46;
 
 type ColumnWidths = {
-  core: number; // width of each core column
-  extra: number; // width of each extra column
-  table: number; // width of the whole table
+  core: number;
+  extra: number;
+  table: number;
 };
 
-// Works out how wide each column should be for this screen width
+//function for width of the columns on a screen
 function getColumnWidths(screenWidth: number): ColumnWidths {
-  /*
-   * Phones: the 7 core columns share whatever space is left after the
-   * name column, so they all fit on screen. The extra columns have a
-   * fixed width and sit off-screen until the user scrolls.
-   *
-   * Wide screens: if every column can fit at its normal width, they all
-   * share the space equally and no scrolling is needed.
-   */
   const availableWidth = screenWidth - ROW_PADDING - NAME_COL_WIDTH;
   const widthIfAllFit = Math.floor(availableWidth / STAT_COLUMNS.length);
   const isWideScreen = widthIfAllFit >= EXTRA_COL_WIDTH;
@@ -99,7 +80,6 @@ function getColumnWidths(screenWidth: number): ColumnWidths {
     extra = widthIfAllFit;
   } else {
     const shareOfSpace = Math.floor(availableWidth / CORE_COUNT);
-    // Keep core columns between the min and max width
     core = Math.min(
       MAX_CORE_COL_WIDTH,
       Math.max(MIN_CORE_COL_WIDTH, shareOfSpace),
@@ -113,14 +93,7 @@ function getColumnWidths(screenWidth: number): ColumnWidths {
   return { core, extra, table };
 }
 
-/* ------------------------------------------------------------------ */
-/* Fantasy points                                                      */
-/* ------------------------------------------------------------------ */
-
-/*
- * Scoring (FanDuel-style). Change these numbers to use a different
- * scoring system.
- */
+//fantasy scoring
 const FANTASY_WEIGHTS = {
   pts: 1,
   reb: 1.2,
@@ -130,14 +103,13 @@ const FANTASY_WEIGHTS = {
   to: -1,
 };
 
-// Turns a stat string like "12" into a number (or 0 if it isn't a number)
 function toNumber(text: string) {
   const num = parseFloat(text);
   return Number.isNaN(num) ? 0 : num;
 }
 
 function calcFantasyPoints(stats: Record<string, string>) {
-  // Players who didn't play have "-" for everything
+  //if player didnt get minutes then display "-"
   if (Number.isNaN(parseFloat(stats.pts))) return "-";
 
   const total =
@@ -148,30 +120,24 @@ function calcFantasyPoints(stats: Record<string, string>) {
     toNumber(stats.blk) * FANTASY_WEIGHTS.blk +
     toNumber(stats.to) * FANTASY_WEIGHTS.to;
 
-  // Round to 1 decimal place
   return (Math.round(total * 10) / 10).toFixed(1);
 }
 
-/* ------------------------------------------------------------------ */
-/* Stat helpers                                                        */
-/* ------------------------------------------------------------------ */
-
-// Shows plus/minus with a + sign for positive numbers, like "+5"
+//formatting for +/-
 function formatPlusMinus(value: string) {
   const num = parseInt(value, 10);
   if (Number.isNaN(num)) return value;
   return num > 0 ? `+${num}` : String(num);
 }
 
-// Green for positive, red for negative, no color change for zero or "-"
+//colors for +/-
 function plusMinusStyle(value: string) {
   const num = parseInt(value, 10);
   if (Number.isNaN(num) || num === 0) return undefined;
   return num > 0 ? styles.positive : styles.negative;
 }
 
-// ESPN sometimes uses slightly different names for the same stat
-// (like "3PT" or "3P"). This returns the first name that has a value.
+//pulls stats from ESPN
 function findStat(statMap: Record<string, string>, possibleNames: string[]) {
   for (const name of possibleNames) {
     if (statMap[name] !== undefined) {
@@ -181,9 +147,8 @@ function findStat(statMap: Record<string, string>, possibleNames: string[]) {
   return "-";
 }
 
-// True shooting percentage, like "58%". Returns "-" if it can't be worked out.
+//function to calculate true shooting
 function calcTrueShooting(fg: string, ft: string, points: string) {
-  // FG looks like "5-13" (made-attempted) and FT looks like "2-2"
   const fgParts = fg.split("-");
   const ftParts = ft.split("-");
   if (fgParts.length !== 2 || ftParts.length !== 2) return "-";
@@ -198,17 +163,8 @@ function calcTrueShooting(fg: string, ft: string, points: string) {
   return `${Math.round((pointsScored / (2 * shootingPlays)) * 100)}%`;
 }
 
-/*
- * Builds every stat for one player, keyed to match STAT_COLUMNS.
- *
- * ESPN gives us a list of stat names (statNames) and a list of values
- * (statValues) in the same order, for example:
- *   statNames  = ["MIN", "FG", "3PT", "FT", "REB", ...]
- *   statValues = ["28", "5-13", "2-6", "0-0", "7", ...]
- * We match them up by position instead of guessing which index is which.
- */
+//matches up stats from ESPN to players
 function buildPlayerStats(statNames: string[], statValues: string[]) {
-  // Build something like { MIN: "28", FG: "5-13", PTS: "12", ... }
   const statMap: Record<string, string> = {};
   statNames.forEach((name, index) => {
     statMap[name] = statValues[index] ?? "-";
@@ -229,14 +185,13 @@ function buildPlayerStats(statNames: string[], statValues: string[]) {
     pf: findStat(statMap, ["PF", "FOULS"]),
   };
 
-  // These two are calculated from the stats above
   stats.ts = calcTrueShooting(stats.fg, stats.ft, stats.pts);
   stats.fpts = calcFantasyPoints(stats);
 
   return stats;
 }
 
-// Uses ESPN's headshot URL if it gives one, otherwise builds the URL ourselves
+// Uses ESPN's headshot URL if it gives one, otherwise builds the URL here
 function getHeadshotUrl(athlete: any, leagueName: string) {
   if (typeof athlete?.headshot === "string") {
     return athlete.headshot;
@@ -247,12 +202,12 @@ function getHeadshotUrl(athlete: any, leagueName: string) {
   return `https://a.espncdn.com/i/headshots/${leagueName}/players/full/${athlete.id}.png`;
 }
 
-// A team's logo can be stored in two different places in ESPN's data
+// finds team logo from ESPN
 function getLogo(competitor: any) {
   return competitor?.team?.logo ?? competitor?.team?.logos?.[0]?.href;
 }
 
-// "Q1" to "Q4", then "OT", "2OT", and so on
+// periods in a game
 function periodLabel(period?: number) {
   if (!period) return "";
   if (period <= 4) return `Q${period}`;
@@ -260,9 +215,7 @@ function periodLabel(period?: number) {
   return `${period - 4}OT`;
 }
 
-// Gets the list of plays for the feed.
-// Basketball has one big list of plays. Football groups plays into drives,
-// so we pull them all out of the drives and put them in one list.
+// game feed
 function getPlays(gameData: any) {
   if (gameData.drives) {
     const allPlays: any[] = [];
@@ -278,10 +231,6 @@ function getPlays(gameData: any) {
   return gameData.plays ?? [];
 }
 
-/* ------------------------------------------------------------------ */
-/* Tab: Feed                                                           */
-/* ------------------------------------------------------------------ */
-
 // Play-by-play, newest play first
 function FeedTab({ plays }: { plays: any[] }) {
   if (plays.length === 0) {
@@ -290,7 +239,7 @@ function FeedTab({ plays }: { plays: any[] }) {
     );
   }
 
-  // ESPN lists plays oldest first, so flip a copy of the list
+  // ESPN lists plays oldest first, so flip the list
   const newestFirst = [...plays].reverse();
 
   return (
@@ -307,17 +256,12 @@ function FeedTab({ plays }: { plays: any[] }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Tab: By Quarter                                                     */
-/* ------------------------------------------------------------------ */
-
-// A small table of each team's score in each quarter
+// table of quarter by quarter scores
 function QuartersTab({ competition }: { competition: any }) {
   const competitors = competition?.competitors ?? [];
   const awayTeam = competitors.find((c: any) => c.homeAway === "away");
   const homeTeam = competitors.find((c: any) => c.homeAway === "home");
 
-  // One entry per quarter for each team
   const awayScores = awayTeam?.linescores ?? [];
   const homeScores = homeTeam?.linescores ?? [];
   const quarterCount = Math.max(awayScores.length, homeScores.length);
@@ -350,7 +294,7 @@ function QuartersTab({ competition }: { competition: any }) {
         </Text>
         {awayScores.map((quarter: any, index: number) => (
           <Text key={index} style={[styles.qCell, styles.white]}>
-            {quarter.value}
+            {quarter.displayValue ?? quarter.value}
           </Text>
         ))}
         <Text style={[styles.qCell, styles.white, { fontWeight: "bold" }]}>
@@ -365,7 +309,7 @@ function QuartersTab({ competition }: { competition: any }) {
         </Text>
         {homeScores.map((quarter: any, index: number) => (
           <Text key={index} style={[styles.qCell, styles.white]}>
-            {quarter.value}
+            {quarter.displayValue ?? quarter.value}
           </Text>
         ))}
         <Text style={[styles.qCell, styles.white, { fontWeight: "bold" }]}>
@@ -376,11 +320,9 @@ function QuartersTab({ competition }: { competition: any }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Tab: Box Score                                                      */
-/* ------------------------------------------------------------------ */
+// Box Score
 
-// One player's row in the box score
+// one player's row in the box score
 function PlayerRow({
   playerData,
   statNames,
@@ -398,7 +340,7 @@ function PlayerRow({
 
   return (
     <View style={[styles.playerRow, { width: widths.table }]}>
-      {/* Tapping the name opens the player's profile */}
+      {/* pressing the name opens the player's profile */}
       <TouchableOpacity
         style={styles.playerInfo}
         onPress={() =>
@@ -418,7 +360,7 @@ function PlayerRow({
         </Text>
       </TouchableOpacity>
 
-      {/* Tapping the stats opens the player's game stats */}
+      {/* pressing the stats opens the player's game stats */}
       <TouchableOpacity
         style={styles.statsTouchable}
         onPress={() =>
@@ -478,7 +420,7 @@ function BoxScoreTab({
     );
   }
 
-  // Find the group of stats that has the list of players
+  // find the group of stats that has the list of players
   const teamData = teams[selectedTeam];
   const statGroup = teamData?.statistics?.find((group: any) =>
     Array.isArray(group.athletes),
@@ -488,7 +430,7 @@ function BoxScoreTab({
 
   return (
     <View>
-      {/* Buttons to switch between the two teams */}
+      {/* tabs to switch between teams in box score */}
       <View style={styles.teamSlider}>
         {teams.map((team, index) => (
           <TouchableOpacity
@@ -511,7 +453,7 @@ function BoxScoreTab({
         ))}
       </View>
 
-      {/* The table scrolls sideways when it's wider than the screen */}
+      {/* gives ability to scroll sideways if needed */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={{ width: widths.table }}>
           {/* Column headers */}
@@ -547,9 +489,7 @@ function BoxScoreTab({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/* Screen                                                              */
-/* ------------------------------------------------------------------ */
+// Screen
 
 export default function GameScreen() {
   const { id: gameId, league } = useLocalSearchParams<{
@@ -558,7 +498,6 @@ export default function GameScreen() {
   }>();
   const insets = useSafeAreaInsets();
 
-  // The league comes from the URL. Fall back to WNBA if there isn't one.
   const leagueName = (Array.isArray(league) ? league[0] : league) ?? "wnba";
   const leagueInfo = LEAGUES[leagueName] ?? LEAGUES.wnba;
 
@@ -567,7 +506,7 @@ export default function GameScreen() {
   const [activeTab, setActiveTab] = useState<TabName>("feed");
   const [selectedTeam, setSelectedTeam] = useState(0);
 
-  // Load the game's details from ESPN
+  // load the game's details from ESPN
   useEffect(() => {
     async function loadGame() {
       try {
@@ -677,7 +616,7 @@ export default function GameScreen() {
         ))}
       </View>
 
-      {/* Content for the selected tab */}
+      {/* stats for the selected tab */}
       <ScrollView style={{ flex: 1 }}>
         {activeTab === "feed" && <FeedTab plays={getPlays(gameData)} />}
 

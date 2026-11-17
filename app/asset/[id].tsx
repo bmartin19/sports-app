@@ -21,35 +21,46 @@ import {
 } from "../../lib/market";
 import { supabase } from "../../services/supabase";
 
-// These must match the numbers inside execute_trade() in Supabase.
-// They are only used to show an estimate before the user confirms.
+//must match in Supabase
 const LIQUIDITY = 500;
 const MAX_ORDER = 100;
 
+//same formula Supabase uses. If you buy shares, the price goes up. If you sell, it goes down.
+function estimateBuyCost(price: number, shares: number) {
+  return price * LIQUIDITY * (Math.exp(shares / LIQUIDITY) - 1);
+}
+
+function estimateSellPayout(price: number, shares: number) {
+  return price * LIQUIDITY * (1 - Math.exp(-shares / LIQUIDITY));
+}
+
 export default function AssetScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id: assetId } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
 
+  // the player or team being shown
   const [asset, setAsset] = useState<MarketAsset | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // info about the logged-in user
   const [signedIn, setSignedIn] = useState(false);
   const [cash, setCash] = useState<number | null>(null);
-  const [owned, setOwned] = useState(0);
+  const [sharesOwned, setSharesOwned] = useState(0);
 
   const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [qtyText, setQtyText] = useState("1");
-  const [busy, setBusy] = useState(false);
+  const [quantityText, setQuantityText] = useState("1");
+  const [trading, setTrading] = useState(false);
   const [message, setMessage] = useState<{ text: string; ok: boolean } | null>(
     null,
   );
 
-  const load = useCallback(async () => {
-    const { data: a } = await supabase
+  const loadData = useCallback(async () => {
+    const { data: assetRow } = await supabase
       .from("market_assets")
       .select("*")
-      .eq("asset_id", id)
+      .eq("asset_id", assetId)
       .maybeSingle();
-    setAsset(a ? toAsset(a) : null);
+    setAsset(assetRow ? toAsset(assetRow) : null);
 
     const {
       data: { session },
@@ -57,7 +68,8 @@ export default function AssetScreen() {
     setSignedIn(Boolean(session));
 
     if (session) {
-      const [prof, hold] = await Promise.all([
+      // gets user information about how many belief points they have and shares
+      const [profileResult, holdingResult] = await Promise.all([
         supabase
           .from("profiles")
           .select("cash_balance")
@@ -67,81 +79,109 @@ export default function AssetScreen() {
           .from("holdings")
           .select("quantity")
           .eq("user_id", session.user.id)
-          .eq("asset_id", id)
+          .eq("asset_id", assetId)
           .maybeSingle(),
       ]);
-      setCash(prof.data ? Number(prof.data.cash_balance) : null);
-      setOwned(hold.data ? Number(hold.data.quantity) : 0);
+      setCash(
+        profileResult.data ? Number(profileResult.data.cash_balance) : null,
+      );
+      setSharesOwned(
+        holdingResult.data ? Number(holdingResult.data.quantity) : 0,
+      );
     } else {
       setCash(null);
-      setOwned(0);
+      setSharesOwned(0);
     }
     setLoading(false);
-  }, [id]);
+  }, [assetId]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    loadData();
+  }, [loadData]);
 
-  const qty = Math.floor(Number(qtyText));
-  const validQty = Number.isFinite(qty) && qty >= 1 && qty <= MAX_ORDER;
+  const quantity = Math.floor(Number(quantityText));
+  const quantityIsValid =
+    Number.isFinite(quantity) && quantity >= 1 && quantity <= MAX_ORDER;
 
-  // Cost along the price curve, same math as the database (so it matches exactly)
+  // Estimated cost shown to the user before confirming
   let estimate: number | null = null;
-  if (asset && validQty) {
-    const p = asset.current_price;
-    estimate =
-      side === "buy"
-        ? p * LIQUIDITY * (Math.exp(qty / LIQUIDITY) - 1)
-        : p * LIQUIDITY * (1 - Math.exp(-qty / LIQUIDITY));
+  if (asset && quantityIsValid) {
+    if (side === "buy") {
+      estimate = estimateBuyCost(asset.current_price, quantity);
+    } else {
+      estimate = estimateSellPayout(asset.current_price, quantity);
+    }
   }
 
-  function bump(delta: number) {
-    const next = Math.min(MAX_ORDER, Math.max(1, (validQty ? qty : 1) + delta));
-    setQtyText(String(next));
+  function changeQuantity(amount: number) {
+    const current = quantityIsValid ? quantity : 1;
+    const next = Math.min(MAX_ORDER, Math.max(1, current + amount));
+    setQuantityText(String(next));
   }
 
-  async function trade() {
+  //function to handle buy/sell
+  async function handleTrade() {
     if (!signedIn) {
       router.push(LOGIN_ROUTE as any);
       return;
     }
-    if (!asset || !validQty) {
+    if (!asset || !quantityIsValid) {
       setMessage({
         text: `Enter a whole number of shares from 1 to ${MAX_ORDER}.`,
         ok: false,
       });
       return;
     }
-    setBusy(true);
+
+    setTrading(true);
     setMessage(null);
+
+    // execute_trade is a function in Supabase that does the actual buy/sell
     const { error } = await supabase.rpc("execute_trade", {
       p_asset_id: asset.asset_id,
       p_side: side,
-      p_quantity: qty,
+      p_quantity: quantity,
     });
-    setBusy(false);
+    setTrading(false);
+
     if (error) {
       setMessage({ text: error.message, ok: false });
     } else {
-      setMessage({
-        text: `${side === "buy" ? "Bought" : "Sold"} ${qty} share${qty === 1 ? "" : "s"}.`,
-        ok: true,
-      });
-      await load();
+      const action = side === "buy" ? "Bought" : "Sold";
+      const shareWord = quantity === 1 ? "share" : "shares";
+      setMessage({ text: `${action} ${quantity} ${shareWord}.`, ok: true });
+      await loadData();
     }
   }
 
   function goBack() {
-    if (router.canGoBack()) router.back();
-    else router.replace("/market" as any);
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/market" as any);
+    }
   }
 
-  const sinceStart =
-    asset && asset.initial_price
-      ? ((asset.current_price - asset.initial_price) / asset.initial_price) *
-        100
-      : null;
+  //percent change of an asset since launch
+  let changeSinceLaunch: number | null = null;
+  if (asset && asset.initial_price) {
+    changeSinceLaunch =
+      ((asset.current_price - asset.initial_price) / asset.initial_price) * 100;
+  }
+
+  let buttonText = "";
+  if (!signedIn) {
+    buttonText = "Log in to trade";
+  } else if (trading) {
+    buttonText = "Working...";
+  } else {
+    const verb = side === "buy" ? "Buy" : "Sell";
+    if (quantityIsValid) {
+      buttonText = `${verb} ${quantity} ${quantity === 1 ? "share" : "shares"}`;
+    } else {
+      buttonText = `${verb} shares`;
+    }
+  }
 
   return (
     <View style={{ flex: 1 }}>
@@ -172,6 +212,7 @@ export default function AssetScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.column}>
+            {/* Name and price */}
             <View style={styles.top}>
               <Avatar uri={asset.image_url} size={88} />
               <Text style={styles.title}>{asset.name}</Text>
@@ -179,59 +220,65 @@ export default function AssetScreen() {
                 <Text style={styles.sub}>{asset.subtitle}</Text>
               ) : null}
               <Text style={styles.bigPrice}>{money(asset.current_price)}</Text>
-              {sinceStart != null && (
+              {changeSinceLaunch != null && (
                 <Text
                   style={[
-                    styles.sinceStart,
-                    sinceStart >= 0 ? styles.up : styles.down,
+                    styles.sinceLaunch,
+                    changeSinceLaunch >= 0 ? styles.up : styles.down,
                   ]}
                 >
-                  {pct(sinceStart)} since launch (
+                  {pct(changeSinceLaunch)} since launch (
                   {money(asset.initial_price ?? 0)})
                 </Text>
               )}
             </View>
 
+            {/* Trade form */}
             <View style={styles.card}>
               <View style={styles.toggleRow}>
-                {(["buy", "sell"] as const).map((s) => (
+                {(["buy", "sell"] as const).map((option) => (
                   <TouchableOpacity
-                    key={s}
+                    key={option}
                     onPress={() => {
-                      setSide(s);
+                      setSide(option);
                       setMessage(null);
                     }}
-                    style={[styles.toggle, side === s && styles.toggleActive]}
+                    style={[
+                      styles.toggle,
+                      side === option && styles.toggleActive,
+                    ]}
                   >
                     <Text
                       style={[
                         styles.toggleText,
-                        side === s && styles.toggleTextActive,
+                        side === option && styles.toggleTextActive,
                       ]}
                     >
-                      {s === "buy" ? "Buy" : "Sell"}
+                      {option === "buy" ? "Buy" : "Sell"}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
               <Text style={styles.label}>Shares</Text>
-              <View style={styles.qtyRow}>
+              <View style={styles.quantityRow}>
                 <TouchableOpacity
-                  style={styles.stepBtn}
-                  onPress={() => bump(-1)}
+                  style={styles.stepButton}
+                  onPress={() => changeQuantity(-1)}
                 >
                   <Text style={styles.stepText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
-                  value={qtyText}
-                  onChangeText={(t) => setQtyText(t.replace(/[^0-9]/g, ""))}
+                  value={quantityText}
+                  onChangeText={(text) =>
+                    setQuantityText(text.replace(/[^0-9]/g, ""))
+                  }
                   keyboardType="number-pad"
-                  style={styles.qtyInput}
+                  style={styles.quantityInput}
                 />
                 <TouchableOpacity
-                  style={styles.stepBtn}
-                  onPress={() => bump(1)}
+                  style={styles.stepButton}
+                  onPress={() => changeQuantity(1)}
                 >
                   <Text style={styles.stepText}>+</Text>
                 </TouchableOpacity>
@@ -248,9 +295,8 @@ export default function AssetScreen() {
 
               {signedIn && (
                 <Text style={[styles.lineDim, { marginTop: 10 }]}>
-                  Cash: {cash == null ? "—" : money(cash)} · You own {owned}{" "}
-                  share
-                  {owned === 1 ? "" : "s"}
+                  Cash: {cash == null ? "—" : money(cash)} · You own{" "}
+                  {sharesOwned} {sharesOwned === 1 ? "share" : "shares"}
                 </Text>
               )}
 
@@ -263,26 +309,12 @@ export default function AssetScreen() {
               )}
 
               <TouchableOpacity
-                style={[styles.action, busy && { opacity: 0.6 }]}
-                onPress={trade}
-                disabled={busy}
+                style={[styles.action, trading && { opacity: 0.6 }]}
+                onPress={handleTrade}
+                disabled={trading}
                 activeOpacity={0.8}
               >
-                <Text style={styles.actionText}>
-                  {!signedIn
-                    ? "Log in to trade"
-                    : busy
-                      ? "Working..."
-                      : side === "buy"
-                        ? `Buy ${validQty ? qty : ""} share${qty === 1 ? "" : "s"}`.replace(
-                            "  ",
-                            " ",
-                          )
-                        : `Sell ${validQty ? qty : ""} share${qty === 1 ? "" : "s"}`.replace(
-                            "  ",
-                            " ",
-                          )}
-                </Text>
+                <Text style={styles.actionText}>{buttonText}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -298,6 +330,8 @@ const styles = StyleSheet.create({
   back: { paddingVertical: 8, paddingHorizontal: 4, alignSelf: "flex-start" },
   backText: { color: colors.green, fontSize: 16, fontWeight: "600" },
   column: { width: "100%", maxWidth: 520, paddingHorizontal: 16 },
+
+  // Name and price
   top: { alignItems: "center", marginTop: 8 },
   title: {
     color: "white",
@@ -308,9 +342,11 @@ const styles = StyleSheet.create({
   },
   sub: { color: colors.muted, fontSize: 14, marginTop: 4 },
   bigPrice: { color: "white", fontSize: 40, fontWeight: "800", marginTop: 12 },
-  sinceStart: { fontSize: 13, fontWeight: "600", marginTop: 4 },
+  sinceLaunch: { fontSize: 13, fontWeight: "600", marginTop: 4 },
   up: { color: colors.green },
   down: { color: colors.red },
+
+  // Trade form
   card: {
     backgroundColor: colors.card,
     borderRadius: 16,
@@ -331,8 +367,8 @@ const styles = StyleSheet.create({
   toggleText: { color: "#aaaaaa", fontWeight: "700" },
   toggleTextActive: { color: "#000" },
   label: { color: colors.muted, fontSize: 13, marginBottom: 6 },
-  qtyRow: { flexDirection: "row", alignItems: "center" },
-  stepBtn: {
+  quantityRow: { flexDirection: "row", alignItems: "center" },
+  stepButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -341,7 +377,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   stepText: { color: "white", fontSize: 22, fontWeight: "600" },
-  qtyInput: {
+  quantityInput: {
     flex: 1,
     height: 44,
     marginHorizontal: 10,
