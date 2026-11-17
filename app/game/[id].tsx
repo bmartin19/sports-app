@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -7,8 +7,8 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  View,
   useWindowDimensions,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -153,6 +153,7 @@ export default function GameScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ title: "Game" }} /> {/* ADD */}
         <ActivityIndicator size="large" color="#16fd16" />
       </View>
     );
@@ -161,6 +162,7 @@ export default function GameScreen() {
   if (!gameData) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ title: "Game" }} /> {/* ADD */}
         <Text style={styles.white}>Could not load game.</Text>
       </View>
     );
@@ -212,6 +214,15 @@ export default function GameScreen() {
 
   return (
     <View style={styles.container}>
+      <Stack.Screen
+        options={{
+          title:
+            away && home
+              ? `${away.team?.abbreviation} @ ${home.team?.abbreviation}`
+              : "Game",
+        }}
+      />
+
       {/* Score Header */}
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <View style={styles.teamBlock}>

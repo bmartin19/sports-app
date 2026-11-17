@@ -12,45 +12,55 @@ import {
 } from "react-native";
 import { supabase } from "../services/supabase";
 
+//turns date to YYYY-MM-DD using the user's local time
+function toDateString(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export default function SignUpScreen() {
   const [username, setUsername] = useState("");
-  const [birthday, setBirthday] = useState<Date | null>(null);
-  const [birthdayText, setBirthdayText] = useState("");
-  const [showDatePicker, setShowDatePicker] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  //web birthday inputs bc mobile has date picker
+  const [birthday, setBirthday] = useState<Date | null>(null);
+  const [birthdayInput, setBirthdayInput] = useState("");
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  function formatDate(date: Date) {
-    return date.toISOString().split("T")[0];
-  }
-
-  async function handleSignUp() {
+  async function createAccount() {
+    // clear previous attempts
     setErrorMessage("");
     setSuccessMessage("");
 
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    // create the login (username + password)
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp(
+      { email, password },
+    );
 
-    if (error) {
-      setErrorMessage(error.message);
+    if (signUpError) {
+      setErrorMessage(signUpError.message);
       return;
     }
 
-    if (data.user) {
+    // create the matching row in supabase
+    if (signUpData.user) {
+      const birthdayValue =
+        Platform.OS === "web"
+          ? birthdayInput || null
+          : birthday
+            ? toDateString(birthday)
+            : null;
+
       const { error: profileError } = await supabase.from("profiles").insert({
-        id: data.user.id,
+        id: signUpData.user.id,
         username,
-        birthday:
-          Platform.OS === "web"
-            ? birthdayText || null
-            : birthday
-              ? formatDate(birthday)
-              : null,
+        birthday: birthdayValue,
       });
 
       if (profileError) {
@@ -59,8 +69,8 @@ export default function SignUpScreen() {
       }
     }
 
+    // short pause for the message, then go to login screen
     setSuccessMessage("Account created! Redirecting to login...");
-
     setTimeout(() => {
       router.replace("/login");
     }, 1000);
@@ -78,27 +88,19 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Username"
-        placeholderTextColor={"#888"}
+        placeholderTextColor="#888"
         value={username}
         onChangeText={setUsername}
       />
 
+      {/* Birthday: text box on web, date picker on mobile */}
       {Platform.OS === "web" ? (
         <TextInput
           style={styles.input}
           placeholder="Birthday (YYYY-MM-DD)"
-          placeholderTextColor={"#888"}
-          value={birthdayText}
-          onChangeText={(text) => {
-            setBirthdayText(text);
-
-            const date = new Date(text);
-            if (!isNaN(date.getTime())) {
-              setBirthday(date);
-            } else {
-              setBirthday(null);
-            }
-          }}
+          placeholderTextColor="#888"
+          value={birthdayInput}
+          onChangeText={setBirthdayInput}
         />
       ) : (
         <>
@@ -106,7 +108,9 @@ export default function SignUpScreen() {
             style={styles.input}
             onPress={() => setShowDatePicker(true)}
           >
-            <Text>{birthday ? formatDate(birthday) : "Select Birthday"}</Text>
+            <Text style={birthday ? styles.dateText : styles.datePlaceholder}>
+              {birthday ? toDateString(birthday) : "Select Birthday"}
+            </Text>
           </TouchableOpacity>
 
           {showDatePicker && (
@@ -114,12 +118,9 @@ export default function SignUpScreen() {
               value={birthday || new Date(2000, 0, 1)}
               mode="date"
               display="default"
-              onChange={(event, selectedDate) => {
+              onChange={(_event, pickedDate) => {
                 setShowDatePicker(false);
-
-                if (selectedDate) {
-                  setBirthday(selectedDate);
-                }
+                if (pickedDate) setBirthday(pickedDate);
               }}
             />
           )}
@@ -129,7 +130,7 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Email"
-        placeholderTextColor={"#888"}
+        placeholderTextColor="#888"
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -138,22 +139,23 @@ export default function SignUpScreen() {
       <TextInput
         style={styles.input}
         placeholder="Password"
-        placeholderTextColor={"#888"}
+        placeholderTextColor="#888"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
       />
 
-      <TouchableOpacity style={styles.button} onPress={handleSignUp}>
+      <TouchableOpacity style={styles.button} onPress={createAccount}>
         <Text style={styles.buttonText}>Sign Up</Text>
       </TouchableOpacity>
 
+      {/* howver for web */}
       <Pressable
-        style={styles.linkContainer}
+        style={styles.loginLinkWrap}
         onPress={() => router.push("/login")}
       >
         {({ hovered }) => (
-          <Text style={[styles.link, hovered && styles.linkHover]}>
+          <Text style={[styles.loginLink, hovered && styles.loginLinkHover]}>
             Already have an account? Log in
           </Text>
         )}
@@ -163,8 +165,6 @@ export default function SignUpScreen() {
 }
 
 const styles = StyleSheet.create({
-  error: { color: "red", marginBottom: 12, textAlign: "center" },
-  success: { color: "green", marginBottom: 12, textAlign: "center" },
   container: {
     flex: 1,
     justifyContent: "center",
@@ -187,28 +187,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#1e1e1e",
     color: "#ffffff",
   },
+  dateText: { color: "#ffffff" },
+  datePlaceholder: { color: "#888" },
   button: {
     backgroundColor: "#7d68da",
     padding: 15,
     borderRadius: 10,
     marginTop: 8,
   },
-  buttonText: {
-    color: "white",
-    textAlign: "center",
-    fontWeight: "bold",
-  },
-  linkContainer: {
-    alignSelf: "center",
-    marginTop: 12,
-  },
-
-  link: {
-    color: "#007bff",
-    fontWeight: "500",
-  },
-
-  linkHover: {
-    color: "#0056b3",
-  },
+  buttonText: { color: "white", textAlign: "center", fontWeight: "bold" },
+  error: { color: "red", marginBottom: 12, textAlign: "center" },
+  success: { color: "green", marginBottom: 12, textAlign: "center" },
+  loginLinkWrap: { alignSelf: "center", marginTop: 12 },
+  loginLink: { color: "#007bff", fontWeight: "500" },
+  loginLinkHover: { color: "#0056b3" },
 });

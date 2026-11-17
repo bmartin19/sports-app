@@ -13,43 +13,46 @@ import { supabase } from "../services/supabase";
 export default function LoginScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  const handleLogin = async () => {
-    setError("");
+  async function logIn() {
+    //clear inputs from previous attempts
+    setErrorMessage("");
     setSuccessMessage("");
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { error: authError } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
 
-    if (error) {
-      setError(error.message);
+    if (authError) {
+      setErrorMessage(authError.message);
       return;
     }
 
+    //short pause so the user can see the message
+    // replace() so that the back button doesn't take the user to the log in page
     setSuccessMessage("Login successful...");
-
     setTimeout(() => {
       router.replace("/(tabs)/sports" as any);
     }, 1000);
-  };
+  }
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Sportfolio</Text>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
       {successMessage ? (
         <Text style={styles.success}>{successMessage}</Text>
       ) : null}
 
+      {/* Input Boxes*/}
       <TextInput
         style={styles.input}
         placeholder="Email"
-        placeholderTextColor={"#888"}
+        placeholderTextColor="#888"
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -58,24 +61,25 @@ export default function LoginScreen() {
       <TextInput
         style={styles.input}
         placeholder="Password"
-        placeholderTextColor={"#888"}
+        placeholderTextColor="#888"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
       />
 
+      {/* hovered on web for sign up link */}
       <Pressable
-        style={styles.linkContainer}
+        style={styles.signupLinkWrap}
         onPress={() => router.push("/signup")}
       >
         {({ hovered }) => (
-          <Text style={[styles.link, hovered && styles.linkHover]}>
+          <Text style={[styles.signupLink, hovered && styles.signupLinkHover]}>
             Don&apos;t have an account? Sign up
           </Text>
         )}
       </Pressable>
 
-      <TouchableOpacity style={styles.button} onPress={handleLogin}>
+      <TouchableOpacity style={styles.button} onPress={logIn}>
         <Text style={styles.buttonText}>Log In</Text>
       </TouchableOpacity>
     </View>
@@ -111,23 +115,7 @@ const styles = StyleSheet.create({
   buttonText: { color: "#fff", fontWeight: "600" },
   error: { color: "red", marginBottom: 12, textAlign: "center" },
   success: { color: "green", marginBottom: 12, textAlign: "center" },
-
-  linkText: {
-    textAlign: "center",
-    marginTop: 12,
-    color: "#444",
-  },
-
-  link: {
-    color: "#007bff",
-    fontWeight: "600",
-  },
-
-  linkContainer: {
-    alignSelf: "center",
-    marginTop: 12,
-  },
-  linkHover: {
-    color: "#0056b3", // darker blue on hover
-  },
+  signupLinkWrap: { alignSelf: "center", marginTop: 12 },
+  signupLink: { color: "#007bff", fontWeight: "600" },
+  signupLinkHover: { color: "#0056b3" }, // darker blue on hover
 });

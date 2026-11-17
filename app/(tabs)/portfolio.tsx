@@ -28,9 +28,10 @@ const LIQUIDITY = 500;
 // Change this if yours is called something else.
 const TX_DATE_COLUMN = "created_at";
 
-// How many transactions to load, and how many to show before "Show all".
+// How many rows to load, and how many to show before "Show all".
 const TX_LOAD_LIMIT = 500;
-const TX_PREVIEW_COUNT = 10;
+const DIVIDEND_LOAD_LIMIT = 200;
+const HISTORY_PREVIEW_COUNT = 10;
 
 // What you would actually receive if you sold `q` shares at spot price `p`.
 // (Selling in several smaller orders gives the same total, so this is the
@@ -58,6 +59,8 @@ function formatDate(iso: string, withTime = false) {
   return `${date}, ${time}`;
 }
 
+const sharesLabel = (n: number) => `${n} share${n === 1 ? "" : "s"}`;
+
 type Holding = {
   quantity: number;
   avg_cost: number;
@@ -67,16 +70,18 @@ type Holding = {
   lastBought: string | null; // date of the most recent buy
 };
 
-type Tx = {
-  id: string;
-  side: "buy" | "sell";
-  quantity: number;
-  unit_price: number;
+// One line in the history list: a buy, a sell, or a dividend payout
+type Activity = {
+  key: string;
+  kind: "buy" | "sell" | "dividend";
+  detail: string; // e.g. "5 shares @ 12.40", "5 shares · 31.5 fantasy pts" or "5 shares · won by 12"
   total: number;
   date: string;
   asset: MarketAsset | null;
   asset_id: string;
 };
+
+const BADGE_TEXT = { buy: "BUY", sell: "SELL", dividend: "MATCH" } as const;
 
 export default function PortfolioScreen() {
   const insets = useSafeAreaInsets();
@@ -84,10 +89,10 @@ export default function PortfolioScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [cash, setCash] = useState(0);
-  const [realized, setRealized] = useState(0);
+  const [dividends, setDividends] = useState(0);
   const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [transactions, setTransactions] = useState<Tx[]>([]);
-  const [showAllTx, setShowAllTx] = useState(false);
+  const [history, setHistory] = useState<Activity[]>([]);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   const load = useCallback(async () => {
     const {
@@ -100,10 +105,10 @@ export default function PortfolioScreen() {
     }
     setSignedIn(true);
 
-    const [prof, rows, txRows] = await Promise.all([
+    const [prof, rows, txRows, divRows] = await Promise.all([
       supabase
         .from("profiles")
-        .select("cash_balance, realized_pnl")
+        .select("cash_balance, dividends_earned")
         .eq("id", session.user.id)
         .maybeSingle(),
       supabase
@@ -118,18 +123,28 @@ export default function PortfolioScreen() {
         .eq("user_id", session.user.id)
         .order(TX_DATE_COLUMN, { ascending: false })
         .limit(TX_LOAD_LIMIT),
+      supabase
+        .from("dividend_payments")
+        .select(
+          "id, asset_id, shares, fantasy_points, margin, amount, created_at",
+        )
+        .eq("user_id", session.user.id)
+        .order("created_at", { ascending: false })
+        .limit(DIVIDEND_LOAD_LIMIT),
     ]);
     setCash(Number(prof.data?.cash_balance ?? 0));
-    setRealized(Number(prof.data?.realized_pnl ?? 0));
+    setDividends(Number(prof.data?.dividends_earned ?? 0));
 
     const held = rows.data ?? [];
     const txData = (txRows.data ?? []) as any[];
+    const divData = (divRows.data ?? []) as any[];
 
-    // Load every asset we need to show a name for (held + traded)
+    // Load every asset we need to show a name for (held, traded, or paid a dividend)
     const assetIds = [
       ...new Set([
         ...held.map((h) => h.asset_id),
         ...txData.map((t) => t.asset_id),
+        ...divData.map((d) => d.asset_id),
       ]),
     ];
     let assets: MarketAsset[] = [];
@@ -171,18 +186,32 @@ export default function PortfolioScreen() {
     list.sort((a, b) => b.value - a.value);
     setHoldings(list);
 
-    setTransactions(
-      txData.map((t) => ({
-        id: String(t.id),
-        side: t.side,
-        quantity: Number(t.quantity),
-        unit_price: Number(t.unit_price),
+    // Merge trades and dividends into one list, newest first
+    const activity: Activity[] = [
+      ...txData.map((t) => ({
+        key: `tx-${t.id}`,
+        kind: t.side as "buy" | "sell",
+        detail: `${sharesLabel(Number(t.quantity))} @ ${money(Number(t.unit_price))}`,
         total: Number(t.total),
-        date: t[TX_DATE_COLUMN],
+        date: t[TX_DATE_COLUMN] as string,
         asset: assetById.get(String(t.asset_id)) ?? null,
         asset_id: String(t.asset_id),
       })),
-    );
+      ...divData.map((d) => ({
+        key: `div-${d.id}`,
+        kind: "dividend" as const,
+        // Team payouts have a margin of victory, player payouts have fantasy points
+        detail:
+          d.margin != null
+            ? `${sharesLabel(Number(d.shares))} · won by ${Number(d.margin)}`
+            : `${sharesLabel(Number(d.shares))} · ${Number(d.fantasy_points)} fantasy pts`,
+        total: Number(d.amount),
+        date: d.created_at as string,
+        asset: assetById.get(String(d.asset_id)) ?? null,
+        asset_id: String(d.asset_id),
+      })),
+    ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    setHistory(activity);
     setLoading(false);
   }, []);
 
@@ -199,14 +228,16 @@ export default function PortfolioScreen() {
     setRefreshing(false);
   }
 
+  // Dividends are already inside `cash`, so net worth doesn't add them again
   const invested = holdings.reduce((sum, h) => sum + h.value, 0);
   const netWorth = cash + invested;
-  const unrealized = holdings.reduce((sum, h) => sum + h.profit, 0);
-  const totalProfit = realized + unrealized;
+  // Gain on shares still held, plus every dividend paid so far
+  const holdingsProfit = holdings.reduce((sum, h) => sum + h.profit, 0);
+  const totalProfit = holdingsProfit + dividends;
 
-  const visibleTx = showAllTx
-    ? transactions
-    : transactions.slice(0, TX_PREVIEW_COUNT);
+  const visibleHistory = showAllHistory
+    ? history
+    : history.slice(0, HISTORY_PREVIEW_COUNT);
 
   return (
     <View style={{ flex: 1 }}>
@@ -246,7 +277,7 @@ export default function PortfolioScreen() {
               <Text style={styles.netWorth}>{money(netWorth)}</Text>
               <View style={styles.summaryRow}>
                 <View>
-                  <Text style={styles.label}>Cash</Text>
+                  <Text style={styles.label}>Belief Points</Text>
                   <Text style={styles.summaryValue}>{money(cash)}</Text>
                 </View>
                 <View>
@@ -254,7 +285,7 @@ export default function PortfolioScreen() {
                   <Text style={styles.summaryValue}>{money(invested)}</Text>
                 </View>
                 <View>
-                  <Text style={styles.label}>Total profit</Text>
+                  <Text style={styles.label}>Profit / loss</Text>
                   <Text
                     style={[
                       styles.summaryValue,
@@ -267,25 +298,9 @@ export default function PortfolioScreen() {
               </View>
               <View style={styles.summaryRow}>
                 <View>
-                  <Text style={styles.label}>Realized (cashed out)</Text>
-                  <Text
-                    style={[
-                      styles.summaryValue,
-                      realized >= 0 ? styles.up : styles.down,
-                    ]}
-                  >
-                    {signedMoney(realized)}
-                  </Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={styles.label}>Unrealized (still held)</Text>
-                  <Text
-                    style={[
-                      styles.summaryValue,
-                      unrealized >= 0 ? styles.up : styles.down,
-                    ]}
-                  >
-                    {signedMoney(unrealized)}
+                  <Text style={styles.label}>Match earnings</Text>
+                  <Text style={[styles.summaryValue, styles.up]}>
+                    {signedMoney(dividends)}
                   </Text>
                 </View>
               </View>
@@ -322,8 +337,7 @@ export default function PortfolioScreen() {
                         {h.asset.name}
                       </Text>
                       <Text style={styles.sub} numberOfLines={1}>
-                        {h.quantity} share{h.quantity === 1 ? "" : "s"} · avg{" "}
-                        {money(h.avg_cost)}
+                        {sharesLabel(h.quantity)} · avg {money(h.avg_cost)}
                       </Text>
                       {h.lastBought ? (
                         <Text style={styles.sub} numberOfLines={1}>
@@ -347,57 +361,63 @@ export default function PortfolioScreen() {
               })
             )}
 
-            <Text style={styles.sectionTitle}>Transaction history</Text>
-            {transactions.length === 0 ? (
-              <Text style={styles.emptyLeft}>No transactions yet.</Text>
+            <Text style={styles.sectionTitle}>History</Text>
+            {history.length === 0 ? (
+              <Text style={styles.emptyLeft}>No activity yet.</Text>
             ) : (
               <>
-                {visibleTx.map((t) => (
+                {visibleHistory.map((a) => (
                   <TouchableOpacity
-                    key={t.id}
+                    key={a.key}
                     activeOpacity={0.7}
                     style={styles.row}
-                    disabled={!t.asset}
-                    onPress={() => router.push(`/asset/${t.asset_id}` as any)}
+                    disabled={!a.asset}
+                    onPress={() => router.push(`/asset/${a.asset_id}` as any)}
                   >
                     <View
                       style={[
-                        styles.sideBadge,
-                        t.side === "buy" ? styles.buyBadge : styles.sellBadge,
+                        styles.badge,
+                        a.kind === "buy" && styles.buyBadge,
+                        a.kind === "sell" && styles.sellBadge,
+                        a.kind === "dividend" && styles.dividendBadge,
                       ]}
                     >
-                      <Text style={styles.sideBadgeText}>
-                        {t.side === "buy" ? "BUY" : "SELL"}
+                      <Text
+                        style={[
+                          styles.badgeText,
+                          a.kind === "dividend" && styles.badgeTextLight,
+                        ]}
+                      >
+                        {BADGE_TEXT[a.kind]}
                       </Text>
                     </View>
                     <View style={{ flex: 1, marginLeft: 12 }}>
                       <Text style={styles.name} numberOfLines={1}>
-                        {t.asset?.name ?? "Unknown asset"}
+                        {a.asset?.name ?? "Unknown asset"}
                       </Text>
                       <Text style={styles.sub} numberOfLines={1}>
-                        {t.quantity} share{t.quantity === 1 ? "" : "s"} @{" "}
-                        {money(t.unit_price)}
+                        {a.detail}
                       </Text>
                       <Text style={styles.sub} numberOfLines={1}>
-                        {formatDate(t.date, true)}
+                        {formatDate(a.date, true)}
                       </Text>
                     </View>
                     <Text style={styles.price}>
-                      {t.side === "buy" ? "-" : "+"}
-                      {money(t.total)}
+                      {a.kind === "buy" ? "-" : "+"}
+                      {money(a.total)}
                     </Text>
                   </TouchableOpacity>
                 ))}
-                {transactions.length > TX_PREVIEW_COUNT && (
+                {history.length > HISTORY_PREVIEW_COUNT && (
                   <TouchableOpacity
-                    onPress={() => setShowAllTx((v) => !v)}
+                    onPress={() => setShowAllHistory((v) => !v)}
                     activeOpacity={0.7}
                     style={styles.showMore}
                   >
                     <Text style={styles.showMoreText}>
-                      {showAllTx
+                      {showAllHistory
                         ? "Show less"
-                        : `Show all (${transactions.length})`}
+                        : `Show all (${history.length})`}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -473,8 +493,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonText: { color: "#000", fontWeight: "800", fontSize: 15 },
-  sideBadge: {
-    width: 48,
+  badge: {
+    width: 58,
     height: 28,
     borderRadius: 14,
     alignItems: "center",
@@ -482,7 +502,9 @@ const styles = StyleSheet.create({
   },
   buyBadge: { backgroundColor: colors.green },
   sellBadge: { backgroundColor: colors.red },
-  sideBadgeText: { color: "#000", fontSize: 11, fontWeight: "800" },
+  dividendBadge: { backgroundColor: "#7d68da" },
+  badgeText: { color: "#000", fontSize: 11, fontWeight: "800" },
+  badgeTextLight: { color: "#fff" },
   showMore: { alignItems: "center", paddingVertical: 12 },
   showMoreText: { color: colors.green, fontSize: 14, fontWeight: "600" },
 });

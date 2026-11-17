@@ -10,9 +10,10 @@ import {
 import { supabase } from "../../services/supabase";
 
 export default function ProfileScreen() {
+  //State variables for the username and birthday input fields
   const [username, setUsername] = useState("");
   const [birthday, setBirthday] = useState("");
-
+  //Stores the user's current information and placeholders in the input fields
   const [currentUsername, setCurrentUsername] = useState("");
   const [currentBirthday, setCurrentBirthday] = useState("");
 
@@ -21,12 +22,12 @@ export default function ProfileScreen() {
   useEffect(() => {
     getProfile();
   }, []);
-
+  //retrieves the currently logged-in user profile information from Supabase
   async function getProfile() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-
+    //if nobody is logged in, stop loading and exit
     if (!user) {
       setLoading(false);
       return;
@@ -37,7 +38,7 @@ export default function ProfileScreen() {
       .select("username, birthday")
       .eq("id", user.id)
       .single();
-
+    //update saved profile state if a profile was found
     if (data) {
       setCurrentUsername(data.username || "");
       setCurrentBirthday(data.birthday || "");
@@ -55,12 +56,13 @@ export default function ProfileScreen() {
       Alert.alert("Error", "You are not logged in.");
       return;
     }
-
+    //object that contains fields the user might want to update
     const updates: {
       username?: string;
       birthday?: string;
     } = {};
 
+    //check whether the user has entered a new field and trims it
     if (username.trim()) {
       updates.username = username.trim();
     }
@@ -73,7 +75,7 @@ export default function ProfileScreen() {
       Alert.alert("Nothing to save", "Enter a new username or birthday.");
       return;
     }
-
+    //updates profile in Supabase
     const { error } = await supabase
       .from("profiles")
       .update(updates)
@@ -111,7 +113,7 @@ export default function ProfileScreen() {
       </View>
     );
   }
-
+  //Main profile screen UI
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Edit Profile</Text>

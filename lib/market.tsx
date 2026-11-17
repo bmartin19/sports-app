@@ -1,6 +1,5 @@
 import { Image, StyleSheet, View } from "react-native";
 
-// Where "log in" buttons send people. Change this to your login screen's route.
 export const LOGIN_ROUTE = "/login";
 
 export type MarketAsset = {
@@ -13,7 +12,6 @@ export type MarketAsset = {
   initial_price: number | null;
 };
 
-// Supabase can hand numbers back as strings; make sure they are numbers.
 export function toAsset(r: any): MarketAsset {
   return {
     ...r,
@@ -23,7 +21,7 @@ export function toAsset(r: any): MarketAsset {
 }
 
 export const CURRENCY_SYMBOL = "✦";
-export const CURRENCY_NAME = "Belief Points"; // for labels, e.g. "Balance (Belief Points)"
+export const CURRENCY_NAME = "Belief Points";
 
 export const money = (n: number) =>
   `${Number(n).toLocaleString("en-US", {

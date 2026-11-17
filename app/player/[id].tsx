@@ -1,14 +1,17 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { router, Stack, useLocalSearchParams } from "expo-router";
 import {
-    Image,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Image,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+// the box score screen passes every value in as a route parameter
 export default function PlayerGameScreen() {
+  const insets = useSafeAreaInsets();
   const {
     id,
     name,
@@ -25,8 +28,10 @@ export default function PlayerGameScreen() {
     to,
     pf,
     ts,
+    fpts,
   } = useLocalSearchParams();
 
+  // label and value for each stat
   const stats = [
     { label: "Minutes", value: min },
     { label: "Points", value: pts },
@@ -40,46 +45,48 @@ export default function PlayerGameScreen() {
     { label: "Turnovers", value: to },
     { label: "Fouls", value: pf },
     { label: "TS%", value: ts },
+    { label: "Fantasy Points", value: fpts },
   ];
 
-  const headshotUri =
+  // use the headshot from the box score screen or get it directly
+  const headshotUrl =
     (headshot as string) ??
     `https://a.espncdn.com/i/headshots/wnba/players/full/${id}.png`;
 
+  // pressing the photo or names takes you to their profile page
+  function openProfile() {
+    router.push({
+      pathname: "/profile/[id]",
+      params: { id, name, headshot: headshotUrl },
+    } as any);
+  }
+
   return (
     <ScrollView style={styles.container}>
-      <TouchableOpacity onPress={() => router.back()} style={styles.back}>
+      <Stack.Screen options={{ headerShown: false }} />
+
+      {/* extra padding */}
+      <TouchableOpacity
+        onPress={() => router.back()}
+        style={[styles.back, { paddingTop: insets.top + 16 }]}
+      >
         <Text style={styles.green}>← Back</Text>
       </TouchableOpacity>
 
-      {/* Player header */}
+      {/* Player photo and name */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() =>
-            router.push({
-              pathname: "/profile/[id]",
-              params: { id, name, headshot: headshotUri },
-            } as any)
-          }
-        >
-          <Image source={{ uri: headshotUri }} style={styles.headshot} />
+        <TouchableOpacity onPress={openProfile}>
+          <Image source={{ uri: headshotUrl }} style={styles.headshot} />
         </TouchableOpacity>
         <View style={{ flex: 1 }}>
-          <TouchableOpacity
-            onPress={() =>
-              router.push({
-                pathname: "/profile/[id]",
-                params: { id, name, headshot: headshotUri },
-              } as any)
-            }
-          >
+          <TouchableOpacity onPress={openProfile}>
             <Text style={styles.name}>{name}</Text>
           </TouchableOpacity>
           <Text style={styles.sub}>Game Stats</Text>
         </View>
       </View>
 
-      {/* Stats grid */}
+      {/* Stat boxes, three per row. "-" if the stat wasn't recorded */}
       <View style={styles.grid}>
         {stats.map((stat) => (
           <View key={stat.label} style={styles.statBox}>
@@ -105,7 +112,6 @@ const styles = StyleSheet.create({
   },
   name: { color: "white", fontSize: 22, fontWeight: "bold" },
   sub: { color: "#666", fontSize: 13, marginTop: 2 },
-  profileHint: { color: "#444", fontSize: 11, marginTop: 4 },
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
