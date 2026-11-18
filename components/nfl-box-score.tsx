@@ -148,15 +148,17 @@ function TeamComparison({ statTeams }: { statTeams: any[] }) {
         </Text>
       </View>
 
-      {awayStats.map((awayStat) => {
-        // find stat for the home team
-        const homeStat = homeStats.find((s) => s.name === awayStat.name);
+      {awayStats.map((awayStat, index) => {
+        // Match by position first, since names like "interceptions" repeat
+        let homeStat = homeStats[index];
+        if (homeStat?.name !== awayStat.name) {
+          homeStat = homeStats.find((s) => s.name === awayStat.name);
+        }
 
-        // skip stats that don't have valid names we can show
         if (!awayStat.label) return null;
 
         return (
-          <View key={awayStat.name} style={styles.compareRow}>
+          <View key={`${awayStat.name}-${index}`} style={styles.compareRow}>
             <Text style={[styles.compareValue, styles.white]}>
               {awayStat.displayValue ?? "-"}
             </Text>
